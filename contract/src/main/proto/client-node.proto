@@ -14,7 +14,7 @@ message CreateWalletResponse {}
 message DeleteWalletResponse {}
 
 message ReadBalanceRequest {
-  string walletId = 1;
+  string wallet_id = 1;
 }
 
 message ReadBalanceResponse {
@@ -29,10 +29,20 @@ message GetBlockchainStateResponse {
   repeated Transaction transactions = 1;
 }
 
+// NodeService exposes wallet and transaction operations to clients.
 service NodeService {
+  // CreateWallet creates a new wallet for a user.
   rpc CreateWallet(CreateWalletRequest) returns (CreateWalletResponse);
+
+  // DeleteWallet removes an existing wallet belonging to a user.
   rpc DeleteWallet(DeleteWalletRequest) returns (DeleteWalletResponse);
+
+  // ReadBalance returns the current balance of a wallet.
   rpc ReadBalance(ReadBalanceRequest) returns (ReadBalanceResponse);
+
+  // Transfer submits a value transfer between wallets.
   rpc Transfer(TransferRequest) returns (TransferResponse);
+
+  // GetBlockchainState returns the ordered list of transactions in the blockchain state.
   rpc GetBlockchainState(GetBlockchainStateRequest) returns (GetBlockchainStateResponse);
 }

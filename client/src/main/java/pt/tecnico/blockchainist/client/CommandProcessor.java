@@ -3,9 +3,14 @@ package pt.tecnico.blockchainist.client;
 import java.util.ArrayList;
 import java.util.Scanner;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
+import com.google.protobuf.Message;
+
+import io.grpc.StatusRuntimeException;
 import pt.tecnico.blockchainist.client.grpc.ClientNodeService;
+import pt.tecnico.blockchainist.contract.ReadBalanceResponse;
 
 public class CommandProcessor {
 
@@ -101,48 +106,43 @@ public class CommandProcessor {
     private void create(String[] split, boolean isBlocking) {
         this.checkCreateCommandArgs(split);
 
-        Long commandNumber = this.commandCounter.incrementAndGet();
-
         String userId = split[1];
         String walletId = split[2];
         Integer nodeIndex = Integer.parseInt(split[3]);
         Integer nodeDelay = Integer.parseInt(split[4]);
 
-        // TODO
-        System.out.println("TODO: createWallet(" + userId + ", " + walletId + ")");
+        // Make the call
+        ClientNodeService node = nodes.get(nodeIndex);
+        execute(() -> node.createWallet(userId, walletId, nodeDelay));
     }
 
     private void delete(String[] split, boolean isBlocking) {
         this.checkDeleteCommandArgs(split);
 
-        Long commandNumber = this.commandCounter.incrementAndGet();
-
         String userId = split[1];
         String walletId = split[2];
         Integer nodeIndex = Integer.parseInt(split[3]);
         Integer nodeDelay = Integer.parseInt(split[4]);
 
-        // TODO
-        System.out.println("TODO: deleteWallet(" + userId + ", " + walletId + ")");
+        // Make the call
+        ClientNodeService node = nodes.get(nodeIndex);
+        execute(() -> node.deleteWallet(userId, walletId, nodeDelay));
     }
 
     private void balance(String[] split, boolean isBlocking) {
         this.checkBalanceCommandArgs(split);
 
-        Long commandNumber = this.commandCounter.incrementAndGet();
-
         String walletId = split[1];
         Integer nodeIndex = Integer.parseInt(split[2]);
         Integer nodeDelay = Integer.parseInt(split[3]);
 
-        // TODO
-        System.out.println("TODO: readBalance(" + walletId + ")");
+        // Make the call
+        ClientNodeService node = nodes.get(nodeIndex);
+        execute(() -> node.readBalance(walletId, nodeDelay));
     }
 
     private void transfer(String[] split, boolean isBlocking) {
         this.checkTransferCommandArgs(split);
-
-        Long commandNumber = this.commandCounter.incrementAndGet();
 
         String sourceUserId = split[1];
         String sourceWalletId = split[2];
@@ -151,19 +151,19 @@ public class CommandProcessor {
         Integer nodeIndex = Integer.parseInt(split[5]);
         Integer nodeDelay = Integer.parseInt(split[6]);
 
-        // TODO
-        System.out.println("TODO: transfer(" + sourceUserId + ", " + sourceWalletId + ", " + destinationWalletId + ", " + amount + ")");
+        // Make the call
+        ClientNodeService node = nodes.get(nodeIndex);
+        execute(() -> node.transfer(sourceUserId, sourceWalletId, destinationWalletId, amount, nodeDelay));
     }
 
     private void debugBlockchainState(String[] split) {
         this.checkDebugBlockchainStateArgs(split);
 
-        Long commandNumber = this.commandCounter.incrementAndGet();
-
         Integer nodeIndex = Integer.parseInt(split[1]);
 
-        // TODO
-        System.out.println("TODO: getBlockchainState(" + nodeIndex + ")");
+        // Make the call
+        ClientNodeService node = nodes.get(nodeIndex);
+        execute(() -> node.getBlockchainState());
     }
 
     private void pause(String[] split) {
@@ -187,11 +187,13 @@ public class CommandProcessor {
         }
 
         if (!ID_PATTERN.matcher(split[1]).matches()) {
-            throw new IllegalArgumentException("Expected User ID to be composed of ASCII alphanumeric characters, got \"" + split[1] + "\"");
+            throw new IllegalArgumentException(
+                    "Expected User ID to be composed of ASCII alphanumeric characters, got \"" + split[1] + "\"");
         }
 
         if (!ID_PATTERN.matcher(split[2]).matches()) {
-            throw new IllegalArgumentException("Expected Wallet ID to be composed of ASCII alphanumeric characters, got \"" + split[2] + "\"");
+            throw new IllegalArgumentException(
+                    "Expected Wallet ID to be composed of ASCII alphanumeric characters, got \"" + split[2] + "\"");
         }
 
         try {
@@ -214,11 +216,13 @@ public class CommandProcessor {
         }
 
         if (!ID_PATTERN.matcher(split[1]).matches()) {
-            throw new IllegalArgumentException("Expected User ID to be composed of ASCII alphanumeric characters, got \"" + split[1] + "\"");
+            throw new IllegalArgumentException(
+                    "Expected User ID to be composed of ASCII alphanumeric characters, got \"" + split[1] + "\"");
         }
 
         if (!ID_PATTERN.matcher(split[2]).matches()) {
-            throw new IllegalArgumentException("Expected Wallet ID to be composed of ASCII alphanumeric characters, got \"" + split[2] + "\"");
+            throw new IllegalArgumentException(
+                    "Expected Wallet ID to be composed of ASCII alphanumeric characters, got \"" + split[2] + "\"");
         }
 
         try {
@@ -241,7 +245,8 @@ public class CommandProcessor {
         }
 
         if (!ID_PATTERN.matcher(split[1]).matches()) {
-            throw new IllegalArgumentException("Expected Wallet ID to be composed of ASCII alphanumeric characters, got \"" + split[1] + "\"");
+            throw new IllegalArgumentException(
+                    "Expected Wallet ID to be composed of ASCII alphanumeric characters, got \"" + split[1] + "\"");
         }
 
         try {
@@ -258,21 +263,28 @@ public class CommandProcessor {
     }
 
     private void checkTransferCommandArgs(String[] split) {
-        // T|t <source_user_id> <source_wallet_id> <destination_wallet_id> <amount> <node_index> <node_delay>
+        // T|t <source_user_id> <source_wallet_id> <destination_wallet_id> <amount>
+        // <node_index> <node_delay>
         if (split.length != 7) {
             throw new IllegalArgumentException("Expected 7 arguments, got " + split.length);
         }
 
         if (!ID_PATTERN.matcher(split[1]).matches()) {
-            throw new IllegalArgumentException("Expected Source User ID to be composed of ASCII alphanumeric characters, got \"" + split[1] + "\"");
+            throw new IllegalArgumentException(
+                    "Expected Source User ID to be composed of ASCII alphanumeric characters, got \"" + split[1]
+                            + "\"");
         }
 
         if (!ID_PATTERN.matcher(split[2]).matches()) {
-            throw new IllegalArgumentException("Expected Source Wallet ID to be composed of ASCII alphanumeric characters, got \"" + split[2] + "\"");
+            throw new IllegalArgumentException(
+                    "Expected Source Wallet ID to be composed of ASCII alphanumeric characters, got \"" + split[2]
+                            + "\"");
         }
 
         if (!ID_PATTERN.matcher(split[3]).matches()) {
-            throw new IllegalArgumentException("Expected Destination Wallet ID to be composed of ASCII alphanumeric characters, got \"" + split[1] + "\"");
+            throw new IllegalArgumentException(
+                    "Expected Destination Wallet ID to be composed of ASCII alphanumeric characters, got \"" + split[3]
+                            + "\"");
         }
 
         try {
@@ -327,9 +339,36 @@ public class CommandProcessor {
                 "- C|c <user_id> <wallet_id> <node_index> <node_delay>\n" +
                 "- E|e <user_id> <wallet_id> <node_index> <node_delay>\n" +
                 "- S|s <wallet_id> <node_index> <node_delay>\n" +
-                "- T|t <source_user_id> <source_wallet_id> <destination_wallet_id> <amount> <node_index> <node_delay>\n" +
+                "- T|t <source_user_id> <source_wallet_id> <destination_wallet_id> <amount> <node_index> <node_delay>\n"
+                +
                 "- B <node_index>\n" +
                 "- P <integer>\n" +
                 "- X\n");
+    }
+
+    private void execute(Supplier<Message> grpcCall) {
+        Long commandNumber = this.commandCounter.incrementAndGet();
+
+        try {
+            // Print OK message
+            Message response = grpcCall.get();
+            System.out.println("OK " + commandNumber);
+
+            // TODO: Temporary fix because teacher's spec doesnt match the tests.
+            if (response instanceof ReadBalanceResponse readBalanceResponse) {
+                System.out.println(readBalanceResponse.getBalance());
+                return;
+            }
+
+            // Print Response
+            String text = response.toString();
+            if (!text.isBlank()) {
+                System.out.println(text);
+            }
+
+        } catch (StatusRuntimeException e) {
+            // Handle error
+            System.err.println("Error: " + e.getStatus().getDescription());
+        }
     }
 }
