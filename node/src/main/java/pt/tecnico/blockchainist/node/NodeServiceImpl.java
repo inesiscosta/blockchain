@@ -3,28 +3,56 @@ package pt.tecnico.blockchainist.node;
 import io.grpc.stub.StreamObserver;
 import pt.tecnico.blockchainist.contract.*;
 import pt.tecnico.blockchainist.node.domain.NodeState;
-import pt.tecnico.blockchainist.node.domain.Transaction;
+import pt.tecnico.blockchainist.common.Transaction;
+import pt.tecnico.blockchainist.common.Utils;
+import pt.tecnico.blockchainist.node.grpc.NodeSequencerService;
 
 import java.util.List;
-
 import io.grpc.Status;
 
+/**
+ * Implementation of the node gRPC service.
+ * This class handles client requests for blockchain operations by coordinating with the sequencer
+ * and managing the local blockchain state.
+ */
 public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
 
     private final NodeState nodeState = new NodeState();
-    @SuppressWarnings("unused")
-	private final String organization;
-    @SuppressWarnings("unused")
-	private final String sequencerAddress;
+    private final NodeSequencerService sequencer;
 
-    public NodeServiceImpl(String organization, String sequencerAddress) {
-        this.organization = organization;
-        this.sequencerAddress = sequencerAddress;
+    /**
+     * Constructs a new NodeServiceImpl and starts the background transaction fetcher.
+     *
+     * @param organization the organization identifier for this node
+     * @param sequencer the service for communicating with the sequencer
+     */
+    public NodeServiceImpl(String organization, NodeSequencerService sequencer) {
+        this.sequencer = sequencer;
+
+        // Heartbeat
+        startFetchingTransactions();
     }
 
+    /**
+     * Handles wallet creation requests from clients.
+     * Sends the transaction to the sequencer and waits for it to be processed.
+     *
+     * @param request the create wallet request containing user and wallet identifiers
+     * @param responseObserver the observer to send the response back to the client
+     */
     @Override
     public void createWallet(CreateWalletRequest request, StreamObserver<CreateWalletResponse> responseObserver) {
         try {
+            // Log
+            Utils.debug("Received CreateWallet request: userId=%s, walletId=%s",
+                    request.getUserId(), request.getWalletId());
+
+            // Check
+            if (request.getUserId().isBlank())
+                throw new IllegalArgumentException("User ID can't be blank");
+            if (request.getWalletId().isBlank())
+                throw new IllegalArgumentException("Wallet ID can't be blank");
+
             // Map
             Transaction tx = new Transaction(
                     Transaction.Type.CREATE,
@@ -32,9 +60,16 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     "",
                     request.getWalletId(),
                     0);
+            pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
 
-            // Execute
-            nodeState.applyTransaction(tx);
+            // Request Sequencer
+            Utils.debug("Sending transaction to sequencer: CREATE userId=%s walletId=%s",
+                    request.getUserId(), request.getWalletId());
+            BroadcastResponse seqRes = sequencer.broadcast(protoTx);
+            int assignedSequence = seqRes.getSequenceNumber();
+
+            // Wait
+            nodeState.waitForSequence(assignedSequence);
 
             // Reply
             responseObserver.onNext(CreateWalletResponse.getDefaultInstance());
@@ -43,12 +78,32 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         } catch (IllegalArgumentException e) {
             // Error Handling
             responseObserver.onError(Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            responseObserver.onError(Status.INTERNAL.withDescription("Request interrupted").asRuntimeException());
         }
     }
 
+    /**
+     * Handles wallet deletion requests from clients.
+     * Sends the transaction to the sequencer and waits for it to be processed.
+     *
+     * @param request the delete wallet request containing user and wallet identifiers
+     * @param responseObserver the observer to send the response back to the client
+     */
     @Override
     public void deleteWallet(DeleteWalletRequest request, StreamObserver<DeleteWalletResponse> responseObserver) {
         try {
+            // Log
+            Utils.debug("Received DeleteWallet request: userId=%s, walletId=%s",
+                    request.getUserId(), request.getWalletId());
+
+            // Check
+            if (request.getUserId().isBlank())
+                throw new IllegalArgumentException("User ID can't be blank");
+            if (request.getWalletId().isBlank())
+                throw new IllegalArgumentException("Wallet ID can't be blank");
+
             // Map
             Transaction tx = new Transaction(
                     Transaction.Type.DELETE,
@@ -56,9 +111,16 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     request.getWalletId(),
                     "",
                     0);
+            pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
 
-            // Execute
-            nodeState.applyTransaction(tx);
+            // Request Sequencer
+            Utils.debug("Sending transaction to sequencer: DELETE userId=%s walletId=%s",
+                    request.getUserId(), request.getWalletId());
+            BroadcastResponse seqRes = sequencer.broadcast(protoTx);
+            int assignedSequence = seqRes.getSequenceNumber();
+
+            // Wait
+            nodeState.waitForSequence(assignedSequence);
 
             // Reply
             responseObserver.onNext(DeleteWalletResponse.getDefaultInstance());
@@ -67,12 +129,36 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         } catch (IllegalArgumentException e) {
             // Error Handling
             responseObserver.onError(Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            responseObserver.onError(Status.INTERNAL.withDescription("Request interrupted").asRuntimeException());
         }
     }
 
+    /**
+     * Handles transfer requests from clients.
+     * Sends the transaction to the sequencer and waits for it to be processed.
+     *
+     * @param request the transfer request containing source, destination, and amount information
+     * @param responseObserver the observer to send the response back to the client
+     */
     @Override
     public void transfer(TransferRequest request, StreamObserver<TransferResponse> responseObserver) {
         try {
+            // Log
+            Utils.debug("Received Transfer request: userId=%s, srcWalletId=%s, dstWalletId=%s, amount=%d",
+                    request.getSrcUserId(), request.getSrcWalletId(), request.getDstWalletId(), request.getValue());
+
+            // Check
+            if (request.getSrcUserId().isBlank())
+                throw new IllegalArgumentException("Source User ID can't be blank");
+            if (request.getSrcWalletId().isBlank())
+                throw new IllegalArgumentException("Source Wallet ID can't be blank");
+            if (request.getDstWalletId().isBlank())
+                throw new IllegalArgumentException("Destination Wallet ID can't be blank");
+            if (request.getValue() <= 0)
+                throw new IllegalArgumentException("Transfer Amount must be positive");
+
             // Map
             Transaction tx = new Transaction(
                     Transaction.Type.TRANSFER,
@@ -80,9 +166,17 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     request.getSrcWalletId(),
                     request.getDstWalletId(),
                     request.getValue());
+            pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
 
-            // Execute
-            nodeState.applyTransaction(tx);
+            // Request Sequencer
+            Utils.debug(
+                    "Sending transaction to sequencer: TRANSFER userId=%s, srcWalletId=%s, dstWalletId=%s, amount=%d",
+                    request.getSrcUserId(), request.getSrcWalletId(), request.getDstWalletId(), request.getValue());
+            BroadcastResponse seqRes = sequencer.broadcast(protoTx);
+            int assignedSequence = seqRes.getSequenceNumber();
+
+            // Wait
+            nodeState.waitForSequence(assignedSequence);
 
             // Reply
             responseObserver.onNext(TransferResponse.getDefaultInstance());
@@ -91,12 +185,29 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         } catch (IllegalArgumentException e) {
             // Error Handling
             responseObserver.onError(Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            responseObserver.onError(Status.INTERNAL.withDescription("Request interrupted").asRuntimeException());
         }
     }
 
+    /**
+     * Handles read balance requests from clients.
+     * This is a read-only operation that queries the current node state.
+     *
+     * @param request the read balance request containing the wallet identifier
+     * @param responseObserver the observer to send the balance response back to the client
+     */
     @Override
     public void readBalance(ReadBalanceRequest request, StreamObserver<ReadBalanceResponse> responseObserver) {
         try {
+            // Log
+            Utils.debug("Received ReadBalance request: walletId=%s", request.getWalletId());
+
+            // Check
+            if (request.getWalletId().isBlank())
+                throw new IllegalArgumentException("Wallet ID can't be blank");
+
             // Execute
             long balance = nodeState.readBalance(request.getWalletId());
 
@@ -115,16 +226,26 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         }
     }
 
+    /**
+     * Handles blockchain state requests from clients.
+     * Returns the complete transaction history stored in the node.
+     *
+     * @param request the blockchain state request
+     * @param responseObserver the observer to send the blockchain state back to the client
+     */
     @Override
     public void getBlockchainState(GetBlockchainStateRequest request,
             StreamObserver<GetBlockchainStateResponse> responseObserver) {
+        // Log
+        Utils.debug("Received BlockchainState request");
+
         // Execute
         List<Transaction> transactions = nodeState.getBlockchainState();
 
         // Build Reply
         GetBlockchainStateResponse.Builder builder = GetBlockchainStateResponse.newBuilder();
         for (Transaction tx : transactions) {
-            builder.addTransactions(convertToProto(tx));
+            builder.addTransactions(Utils.convertToProto(tx));
         }
         GetBlockchainStateResponse response = builder.build();
 
@@ -133,28 +254,44 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         responseObserver.onCompleted();
     }
 
-    private pt.tecnico.blockchainist.contract.Transaction convertToProto(Transaction domainTx) {
-        var builder = pt.tecnico.blockchainist.contract.Transaction.newBuilder();
+    /**
+     * Starts a background daemon thread that continuously fetches transactions from the sequencer
+     * and applies them to the local blockchain state.
+     */
+    private void startFetchingTransactions() {
+        Thread fetcher = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    int next = nodeState.getNextSequenceNumber();
 
-        switch (domainTx.type()) {
-            case CREATE -> builder.setCreateWallet(CreateWalletRequest.newBuilder()
-                    .setUserId(domainTx.srcUserId())
-                    .setWalletId(domainTx.dstWalletId())
-                    .build());
+                    // Request Sequencer
+                    DeliverTransactionResponse response = sequencer.deliverTransaction(next);
 
-            case DELETE -> builder.setDeleteWallet(DeleteWalletRequest.newBuilder()
-                    .setUserId(domainTx.srcUserId())
-                    .setWalletId(domainTx.srcWalletId())
-                    .build());
-
-            case TRANSFER -> builder.setTransfer(TransferRequest.newBuilder()
-                    .setSrcUserId(domainTx.srcUserId())
-                    .setSrcWalletId(domainTx.srcWalletId())
-                    .setDstWalletId(domainTx.dstWalletId())
-                    .setValue(domainTx.amount())
-                    .build());
-        }
-        return builder.build();
+                    // Execute
+                    if (response.hasTransaction()) {
+                        Transaction domainTx = Utils.convertToDomain(response.getTransaction());
+                        Utils.debug("Received transaction from sequencer: seqNum=%d, type=%s", next, domainTx.type());
+                        nodeState.applyTransaction(domainTx, next);
+                        Utils.debug("Applied transaction seqNum=%d to state", next);
+                    } else {
+                        Thread.sleep(100);
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } catch (Exception e) {
+                    System.err.println("[Error] [Heartbeat] " + e.getMessage());
+                    try {
+                        // Wait a bit before retrying
+                        Thread.sleep(2000);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+            }
+            System.out.println("[Heartbeat] Interrupted. Closing...");
+        });
+        fetcher.setDaemon(true);
+        fetcher.start();
     }
 
 }

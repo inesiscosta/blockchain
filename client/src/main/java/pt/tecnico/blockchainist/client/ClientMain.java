@@ -3,9 +3,20 @@ package pt.tecnico.blockchainist.client;
 import java.util.ArrayList;
 
 import pt.tecnico.blockchainist.client.grpc.ClientNodeService;
+import pt.tecnico.blockchainist.common.Utils;
 
+/**
+ * Main entry point for the blockchain client application.
+ * This class initializes connections to blockchain nodes and starts the command processor
+ * for user interaction.
+ */
 public class ClientMain {
 
+    /**
+     * Main method that parses command-line arguments and initializes the client.
+     *
+     * @param args command-line arguments specifying node connection details format host:port:organization
+     */
     public static void main(String[] args) {
 
         System.out.println(ClientMain.class.getSimpleName());
@@ -29,14 +40,9 @@ public class ClientMain {
             String host = split[0];
             int port = -1;
             try {
-                port = Integer.parseInt(split[1]);
-            } catch (NumberFormatException e) {
+                port = Utils.parsePort(split[1], "node");
+            } catch (IllegalArgumentException e) {
                 System.err.println("Invalid port (" + split[1] + ") in argument: " + arg);
-                printUsage();
-                return;
-            }
-            if (port > 65535 || port < 0) {
-                System.err.println("Port number out of range (0-65535): " + port);
                 printUsage();
                 return;
             }

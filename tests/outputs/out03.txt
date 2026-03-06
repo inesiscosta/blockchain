@@ -1,31 +1,31 @@
 ClientMain
 
-> OK 1
+> 1 OK
 
-> OK 2
+> 2 OK
 
-> OK 3
+> 3 OK
 
-> OK 4
+> 4 OK
 
-> OK 5
-5
+> 5 OK
+balance: 5
 
-> OK 6
-5
+> 6 OK
+balance: 5
 
-> OK 7
-990
+> 7 OK
+balance: 990
 
-> OK 8
+> 8 OK
 
-> OK 9
+> 9 OK
 
-> OK 10
-1000
+> 10 OK
+balance: 1000
 
-> OK 11
+> 11 OK
 
-> OK 12
+> 12 OK
 
 > 

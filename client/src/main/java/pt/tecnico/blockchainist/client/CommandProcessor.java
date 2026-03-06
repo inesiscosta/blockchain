@@ -10,8 +10,14 @@ import com.google.protobuf.Message;
 
 import io.grpc.StatusRuntimeException;
 import pt.tecnico.blockchainist.client.grpc.ClientNodeService;
+import pt.tecnico.blockchainist.common.Utils;
 import pt.tecnico.blockchainist.contract.ReadBalanceResponse;
 
+/**
+ * Processes user commands for interacting with the blockchain.
+ * This class implements a command-line interface for executing blockchain operations
+ * such as wallet creation, deletion, transfers, and balance queries.
+ */
 public class CommandProcessor {
 
     private static final String SPACE = " ";
@@ -32,10 +38,19 @@ public class CommandProcessor {
     private final AtomicLong commandCounter = new AtomicLong(0);
     private final ArrayList<ClientNodeService> nodes;
 
+    /**
+     * Constructs a new CommandProcessor with a list of node connections.
+     *
+     * @param nodes the list of blockchain node services to interact with
+     */
     public CommandProcessor(ArrayList<ClientNodeService> nodes) {
         this.nodes = nodes;
     }
 
+    /**
+     * Starts the main user input loop.
+     * Reads commands from standard input and executes them until the user exits.
+     */
     void userInputLoop() {
 
         Scanner scanner = new Scanner(System.in);
@@ -103,6 +118,12 @@ public class CommandProcessor {
         scanner.close();
     }
 
+    /**
+     * Handles the create wallet command.
+     *
+     * @param split the command arguments split by spaces
+     * @param isBlocking whether the operation should block until completion
+     */
     private void create(String[] split, boolean isBlocking) {
         this.checkCreateCommandArgs(split);
 
@@ -113,9 +134,16 @@ public class CommandProcessor {
 
         // Make the call
         ClientNodeService node = nodes.get(nodeIndex);
+        Utils.debug("Sending CreateWallet request to node %d: userId=%s, walletId=%s", nodeIndex, userId, walletId);
         execute(() -> node.createWallet(userId, walletId, nodeDelay));
     }
 
+    /**
+     * Handles the delete wallet command.
+     *
+     * @param split the command arguments split by spaces
+     * @param isBlocking whether the operation should block until completion
+     */
     private void delete(String[] split, boolean isBlocking) {
         this.checkDeleteCommandArgs(split);
 
@@ -126,9 +154,16 @@ public class CommandProcessor {
 
         // Make the call
         ClientNodeService node = nodes.get(nodeIndex);
+        Utils.debug("Sending DeleteWallet request to node %d: userId=%s, walletId=%s", nodeIndex, userId, walletId);
         execute(() -> node.deleteWallet(userId, walletId, nodeDelay));
     }
 
+    /**
+     * Handles the read balance command.
+     *
+     * @param split the command arguments split by spaces
+     * @param isBlocking whether the operation should block until completion
+     */
     private void balance(String[] split, boolean isBlocking) {
         this.checkBalanceCommandArgs(split);
 
@@ -141,21 +176,34 @@ public class CommandProcessor {
         execute(() -> node.readBalance(walletId, nodeDelay));
     }
 
+    /**
+     * Handles the transfer command.
+     *
+     * @param split the command arguments split by spaces
+     * @param isBlocking whether the operation should block until completion
+     */
     private void transfer(String[] split, boolean isBlocking) {
         this.checkTransferCommandArgs(split);
 
-        String sourceUserId = split[1];
-        String sourceWalletId = split[2];
-        String destinationWalletId = split[3];
-        Long amount = Long.parseLong(split[4]);
+        String userId = split[1];
+        String srcWalletId = split[2];
+        String dstWalletId = split[3];
+        long amount = Long.parseLong(split[4]);
         Integer nodeIndex = Integer.parseInt(split[5]);
         Integer nodeDelay = Integer.parseInt(split[6]);
 
         // Make the call
         ClientNodeService node = nodes.get(nodeIndex);
-        execute(() -> node.transfer(sourceUserId, sourceWalletId, destinationWalletId, amount, nodeDelay));
+        Utils.debug("Sending Transfer request to node %d: userId=%s, srcWalletId=%s, dstWalletId=%s, amount=%d",
+                nodeIndex, userId, srcWalletId, dstWalletId, amount);
+        execute(() -> node.transfer(userId, srcWalletId, dstWalletId, amount, nodeDelay));
     }
 
+    /**
+     * Handles the debug blockchain state command.
+     *
+     * @param split the command arguments split by spaces
+     */
     private void debugBlockchainState(String[] split) {
         this.checkDebugBlockchainStateArgs(split);
 
@@ -166,6 +214,11 @@ public class CommandProcessor {
         execute(() -> node.getBlockchainState());
     }
 
+    /**
+     * Handles the pause command.
+     *
+     * @param split the command arguments split by spaces
+     */
     private void pause(String[] split) {
         this.checkPauseArgs(split);
 
@@ -180,6 +233,12 @@ public class CommandProcessor {
         }
     }
 
+    /**
+     * Validates the arguments for the create wallet command.
+     *
+     * @param split the command arguments to validate
+     * @throws IllegalArgumentException if the arguments are invalid
+     */
     private void checkCreateCommandArgs(String[] split) {
         // C|c <user_id> <wallet_id> <node_index> <node_delay>
         if (split.length != 5) {
@@ -209,6 +268,12 @@ public class CommandProcessor {
         }
     }
 
+    /**
+     * Validates the arguments for the delete wallet command.
+     *
+     * @param split the command arguments to validate
+     * @throws IllegalArgumentException if the arguments are invalid
+     */
     private void checkDeleteCommandArgs(String[] split) {
         // E|e <user_id> <wallet_id> <node_index> <node_delay>
         if (split.length != 5) {
@@ -238,6 +303,12 @@ public class CommandProcessor {
         }
     }
 
+    /**
+     * Validates the arguments for the read balance command.
+     *
+     * @param split the command arguments to validate
+     * @throws IllegalArgumentException if the arguments are invalid
+     */
     private void checkBalanceCommandArgs(String[] split) {
         // S|s <wallet_id> <node_index> <node_delay>
         if (split.length != 4) {
@@ -262,6 +333,12 @@ public class CommandProcessor {
         }
     }
 
+    /**
+     * Validates the arguments for the transfer command.
+     *
+     * @param split the command arguments to validate
+     * @throws IllegalArgumentException if the arguments are invalid
+     */
     private void checkTransferCommandArgs(String[] split) {
         // T|t <source_user_id> <source_wallet_id> <destination_wallet_id> <amount>
         // <node_index> <node_delay>
@@ -303,6 +380,12 @@ public class CommandProcessor {
         }
     }
 
+    /**
+     * Validates the arguments for the debug blockchain state command.
+     *
+     * @param split the command arguments to validate
+     * @throws IllegalArgumentException if the arguments are invalid
+     */
     private void checkDebugBlockchainStateArgs(String[] split) {
         // B <node_index>
         if (split.length != 2) {
@@ -319,6 +402,12 @@ public class CommandProcessor {
         }
     }
 
+    /**
+     * Validates the arguments for the pause command.
+     *
+     * @param split the command arguments to validate
+     * @throws IllegalArgumentException if the arguments are invalid
+     */
     private void checkPauseArgs(String[] split) {
         // P <integer>
         if (split.length != 2) {
@@ -346,17 +435,23 @@ public class CommandProcessor {
                 "- X\n");
     }
 
+    /**
+     * Executes a gRPC call and handles the response or errors.
+     * Prints the command number and result to standard output.
+     *
+     * @param grpcCall the gRPC call to execute
+     */
     private void execute(Supplier<Message> grpcCall) {
         Long commandNumber = this.commandCounter.incrementAndGet();
 
         try {
             // Print OK message
             Message response = grpcCall.get();
-            System.out.println("OK " + commandNumber);
+            System.out.println(commandNumber + " OK");
 
-            // TODO: Temporary fix because teacher's spec doesnt match the tests.
+            // Handle balance
             if (response instanceof ReadBalanceResponse readBalanceResponse) {
-                System.out.println(readBalanceResponse.getBalance());
+                System.out.println("balance: " + readBalanceResponse.getBalance());
                 return;
             }
 
@@ -368,7 +463,7 @@ public class CommandProcessor {
 
         } catch (StatusRuntimeException e) {
             // Handle error
-            System.err.println("Error: " + e.getStatus().getDescription());
+            System.err.println("[Error] " + commandNumber + ": " + e.getStatus().getDescription());
         }
     }
 }

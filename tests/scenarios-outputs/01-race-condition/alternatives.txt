@@ -1,0 +1,55 @@
+--- CLIENT: client-A.txt ---
+ClientMain
+
+> 1 OK
+
+> 2 OK
+
+> 3 OK
+
+> 
+> 4 OK
+balance: 0
+
+> 
+--- CLIENT: client-B.txt ---
+ClientMain
+
+> 1 OK
+
+> 2 OK
+
+> 
+> 
+> 4 OK
+balance: 0
+
+> 
+or
+--- CLIENT: client-A.txt ---
+ClientMain
+
+> 1 OK
+
+> 2 OK
+
+> 
+> 
+> 4 OK
+balance: 0
+
+> 
+--- CLIENT: client-B.txt ---
+ClientMain
+
+> 1 OK
+
+> 2 OK
+
+> 3 OK
+
+> 
+> 4 OK
+balance: 0
+
+> 

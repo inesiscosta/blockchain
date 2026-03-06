@@ -22,9 +22,10 @@
 		builds the selected projects in order. -->
 	<modules>
 		<module>contract</module>
+		<module>common</module>
 		<module>client</module>
 		<module>node</module>
-		<!-- TODO -->
+		<module>sequencer</module>
 	</modules>
 
 </project>

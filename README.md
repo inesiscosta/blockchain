@@ -48,6 +48,17 @@ To compile and install all modules:
 mvn clean install
 ```
 
+### Testing
+
+This project uses the advanced PowerShell script to run all integration tests.
+
+```s
+.\tests\run_tests_advanced.ps1
+
+# To see all flags
+Get-Help .\tests\run_tests_advanced.ps1
+```
+
 ## Built With
 
 * [Maven](https://maven.apache.org/) - Build and dependency management tool;

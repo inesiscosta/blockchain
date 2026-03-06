@@ -1,14 +1,14 @@
 ClientMain
 
-> OK 1
+> 1 OK
 
 > 
-> OK 3
-0
+> 3 OK
+balance: 0
 
-> OK 4
-1000
+> 4 OK
+balance: 1000
 
-> OK 5
+> 5 OK
 
 > 
