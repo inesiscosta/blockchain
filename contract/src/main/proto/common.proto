@@ -10,11 +10,13 @@ option java_multiple_files = true;
 message CreateWalletRequest {
   string user_id = 1;
   string wallet_id = 2;
+  string transaction_id = 3;
 }
 
 message DeleteWalletRequest {
   string user_id = 1;
   string wallet_id = 2;
+  string transaction_id = 3;
 }
 
 message TransferRequest {
@@ -22,6 +24,7 @@ message TransferRequest {
   string src_wallet_id = 2;
   string dst_wallet_id = 3;
   uint64 value = 4;
+  string transaction_id = 5;
 }
 
 message Transaction {
@@ -30,4 +33,5 @@ message Transaction {
     DeleteWalletRequest delete_wallet = 2;
     TransferRequest transfer = 3;
   }
+  string transaction_id = 4;
 }

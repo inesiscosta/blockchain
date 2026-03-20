@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import pt.tecnico.blockchainist.common.DuplicateException;
 import pt.tecnico.blockchainist.common.Transaction;
 import pt.tecnico.blockchainist.common.Utils;
 
@@ -28,7 +29,7 @@ public class NodeState {
 
     private final Map<String, Wallet> wallets = new HashMap<>();
     private final List<Transaction> ledger = new ArrayList<>();
-    private final Map<Integer, IllegalArgumentException> executionErrors = new HashMap<>();
+    private final Map<String, IllegalArgumentException> executionErrors = new HashMap<>();
     private int currentSequence = 0;
     private int currentBlock = 0;
 
@@ -150,14 +151,18 @@ public class NodeState {
      */
     public synchronized void applyTransaction(Transaction tx, int seqNum) {
         // Log
-        Utils.debug("Applying operation: type=%s userId=%s, srcWallet=%s, dstWallet=%s, amount=%s (seqNum=%d)",
+        Utils.debug("Applying operation: type=%s userId=%s, srcWallet=%s, dstWallet=%s, amount=%s (seqNum=%d, txId=%s)",
                 tx.type(), tx.srcUserId(),
                 tx.srcWalletId().isEmpty() ? "null" : tx.srcWalletId(),
                 tx.dstWalletId().isEmpty() ? "null" : tx.dstWalletId(),
-                tx.amount(), seqNum);
+                tx.amount(), seqNum, tx.transactionId());
 
         // Execute
+        IllegalArgumentException executionException = null;
         try {
+            if (isDuplicate(tx.transactionId()))
+                throw new DuplicateException(seqNum);
+
             switch (tx.type()) {
                 case CREATE -> this.createWallet(tx.srcUserId(), tx.dstWalletId());
                 case DELETE -> this.deleteWallet(tx.srcUserId(), tx.srcWalletId());
@@ -165,10 +170,13 @@ public class NodeState {
             }
         } catch (IllegalArgumentException e) {
             // Store Error for later
-            executionErrors.put(seqNum, e);
+            executionException = e;
+        } catch (DuplicateException e) {
+            executionException = executionErrors.get(tx.transactionId());
         } finally {
             // Log
             ledger.add(tx);
+            executionErrors.put(tx.transactionId(), executionException);
 
             // Wake
             this.currentSequence = seqNum;
@@ -198,15 +206,15 @@ public class NodeState {
      * @throws IllegalArgumentException if the transaction at the target sequence
      *                                  number failed
      */
-    public synchronized void waitForSequence(int target) throws InterruptedException {
+    public synchronized void waitForSequence(int target, String transactionId) throws InterruptedException {
         while (currentSequence < target) {
             wait();
         }
 
         // If error exists, throw it in the right thread
-        if (executionErrors.containsKey(target)) {
-            throw executionErrors.remove(target);
-        }
+        IllegalArgumentException e = executionErrors.get(transactionId);
+        if (e != null)
+            throw e;
     }
 
     /**
@@ -218,4 +226,11 @@ public class NodeState {
         return currentBlock + 1;
     }
 
+    private boolean isDuplicate(String transactionId) {
+        if (executionErrors.containsKey(transactionId)) {
+            Utils.debug("Duplicate transaction detected: %s)", transactionId);
+            return true;
+        }
+        return false;
+    }
 }

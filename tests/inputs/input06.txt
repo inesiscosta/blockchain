@@ -1,0 +1,10 @@
+C Alice cA 0 0
+T BC bc cA 100 1 0
+T Alice cA bc 200 0 0
+T Alice cA bc 50 2 0
+S cA 0 0
+S bc 1 0
+S cA 2 0
+T Alice cA bc 50 1 0
+E Alice cA 2 0
+X

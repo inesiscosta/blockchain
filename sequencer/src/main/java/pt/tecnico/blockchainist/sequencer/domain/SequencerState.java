@@ -76,6 +76,15 @@ public class SequencerState {
     }
 
     /**
+     * Retrieves the last block number that has been cut.
+     *
+     * @return the last block number (0 if no blocks have been cut)
+     */
+    public synchronized int getLastBlockNumber() {
+        return blocks.size();
+    }
+
+    /**
      * Cuts the current pending block and adds it to the ledger.
      */
     private synchronized void cutBlock() {

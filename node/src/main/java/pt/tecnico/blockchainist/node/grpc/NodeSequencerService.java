@@ -53,6 +53,16 @@ public class NodeSequencerService {
     }
 
     /**
+     * Requests the last block number from the sequencer.
+     *
+     * @return LastBlockNumberResponse containing the last block number
+     */
+    public LastBlockNumberResponse getLastBlockNumber() {
+        LastBlockNumberRequest request = LastBlockNumberRequest.newBuilder().build();
+        return blockingStub.lastBlockNumber(request);
+    }
+
+    /**
      * Shuts down the gRPC channel connection to the sequencer.
      */
     public void shutdown() {

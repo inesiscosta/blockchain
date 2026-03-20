@@ -1,11 +1,13 @@
 package pt.tecnico.blockchainist.client.grpc;
 
 import pt.tecnico.blockchainist.contract.*;
+ 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.stub.StreamObserver;
 import io.grpc.Metadata;
 import io.grpc.stub.MetadataUtils;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Service class for client-side gRPC communication with blockchain nodes.
@@ -17,6 +19,7 @@ public class ClientNodeService {
     private final ManagedChannel channel;
     private final NodeServiceGrpc.NodeServiceBlockingStub blockingStub;
     private final NodeServiceGrpc.NodeServiceStub asyncStub;
+    private final int timeout;
     private static final Metadata.Key<String> HEADER_KEY_DELAY = Metadata.Key.of("delay",
             Metadata.ASCII_STRING_MARSHALLER);
 
@@ -28,9 +31,10 @@ public class ClientNodeService {
      * @param port         the port number on which the blockchain node is listening
      * @param organization the organization identifier (currently unused)
      */
-    public ClientNodeService(String host, int port, String organization) {
+    public ClientNodeService(String host, int port, String organization, int timeout) {
         // Open the connection
         this.channel = ManagedChannelBuilder.forAddress(host, port).usePlaintext().build();
+        this.timeout = timeout;
 
         // Create the stubs
         this.blockingStub = NodeServiceGrpc.newBlockingStub(channel);
@@ -48,8 +52,9 @@ public class ClientNodeService {
      * @return CreateWalletResponse containing the result of the wallet creation
      *         operation
      */
-    public CreateWalletResponse createWallet(String userId, String walletId, Integer delay) {
-        CreateWalletRequest request = CreateWalletRequest.newBuilder().setUserId(userId).setWalletId(walletId).build();
+    public CreateWalletResponse createWallet(String userId, String walletId, Integer delay, String transactionId) {
+        CreateWalletRequest request = CreateWalletRequest.newBuilder().setUserId(userId).setWalletId(walletId)
+                .setTransactionId(transactionId).build();
         return withDelay(blockingStub, delay).createWallet(request);
     }
 
@@ -62,8 +67,12 @@ public class ClientNodeService {
      * @return DeleteWalletResponse containing the result of the wallet deletion
      *         operation
      */
-    public DeleteWalletResponse deleteWallet(String userId, String walletId, Integer delay) {
-        DeleteWalletRequest request = DeleteWalletRequest.newBuilder().setUserId(userId).setWalletId(walletId).build();
+    public DeleteWalletResponse deleteWallet(String userId, String walletId, Integer delay, String transactionId) {
+        DeleteWalletRequest request = DeleteWalletRequest.newBuilder()
+                .setUserId(userId)
+                .setWalletId(walletId)
+                .setTransactionId(transactionId)
+                .build();
         return withDelay(blockingStub, delay).deleteWallet(request);
     }
 
@@ -77,9 +86,14 @@ public class ClientNodeService {
      * @param delay     optional delay parameter (currently unused)
      * @return TransferResponse containing the result of the transfer operation
      */
-    public TransferResponse transfer(String srcUserId, String srcWallet, String dstWallet, Long amount, Integer delay) {
-        TransferRequest request = TransferRequest.newBuilder().setSrcUserId(srcUserId).setSrcWalletId(srcWallet)
-                .setDstWalletId(dstWallet).setValue(amount.longValue()).build();
+    public TransferResponse transfer(String srcUserId, String srcWallet, String dstWallet, Long amount, Integer delay, String transactionId) {
+        TransferRequest request = TransferRequest.newBuilder()
+                .setSrcUserId(srcUserId)
+                .setSrcWalletId(srcWallet)
+                .setDstWalletId(dstWallet)
+                .setValue(amount.longValue())
+                .setTransactionId(transactionId)
+                .build();
         return withDelay(blockingStub, delay).transfer(request);
     }
 
@@ -116,9 +130,13 @@ public class ClientNodeService {
      * @return CreateWalletResponse containing the result of the wallet creation
      *         operation
      */
-    public void createWalletAsync(String userId, String walletId, Integer delay,
+    public void createWalletAsync(String userId, String walletId, Integer delay, String transactionId,
             StreamObserver<CreateWalletResponse> observer) {
-        CreateWalletRequest request = CreateWalletRequest.newBuilder().setUserId(userId).setWalletId(walletId).build();
+        CreateWalletRequest request = CreateWalletRequest.newBuilder()
+                .setUserId(userId)
+                .setWalletId(walletId)
+                .setTransactionId(transactionId)
+                .build();
         withDelay(asyncStub, delay).createWallet(request, observer);
     }
 
@@ -132,9 +150,13 @@ public class ClientNodeService {
      * @return DeleteWalletResponse containing the result of the wallet deletion
      *         operation
      */
-    public void deleteWalletAsync(String userId, String walletId, Integer delay,
+    public void deleteWalletAsync(String userId, String walletId, Integer delay, String transactionId,
             StreamObserver<DeleteWalletResponse> observer) {
-        DeleteWalletRequest request = DeleteWalletRequest.newBuilder().setUserId(userId).setWalletId(walletId).build();
+        DeleteWalletRequest request = DeleteWalletRequest.newBuilder()
+                .setUserId(userId)
+                .setWalletId(walletId)
+                .setTransactionId(transactionId)
+                .build();
         withDelay(asyncStub, delay).deleteWallet(request, observer);
     }
 
@@ -149,10 +171,15 @@ public class ClientNodeService {
      * @param observer  the StreamObserver to receive the asynchronous response
      * @return TransferResponse containing the result of the transfer operation
      */
-    public void transferAsync(String srcUserId, String srcWallet, String dstWallet, Long amount, Integer delay,
+    public void transferAsync(String srcUserId, String srcWallet, String dstWallet, Long amount, Integer delay, String transactionId,
             StreamObserver<TransferResponse> observer) {
-        TransferRequest request = TransferRequest.newBuilder().setSrcUserId(srcUserId).setSrcWalletId(srcWallet)
-                .setDstWalletId(dstWallet).setValue(amount.longValue()).build();
+        TransferRequest request = TransferRequest.newBuilder()
+                .setSrcUserId(srcUserId)
+                .setSrcWalletId(srcWallet)
+                .setDstWalletId(dstWallet)
+                .setValue(amount.longValue())
+                .setTransactionId(transactionId)
+                .build();
         withDelay(asyncStub, delay).transfer(request, observer);
     }
 
@@ -169,7 +196,8 @@ public class ClientNodeService {
     private <T extends io.grpc.stub.AbstractStub<T>> T withDelay(T stub, Integer delay) {
         Metadata metadata = new Metadata();
         metadata.put(HEADER_KEY_DELAY, delay != null ? delay.toString() : "0");
-        return stub.withInterceptors(MetadataUtils.newAttachHeadersInterceptor(metadata));
+        return stub.withInterceptors(MetadataUtils.newAttachHeadersInterceptor(metadata))
+                .withDeadlineAfter(timeout, TimeUnit.SECONDS);
     }
 
     /**

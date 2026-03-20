@@ -25,6 +25,12 @@ message DeliverBlockResponse {
   repeated Transaction transaction = 1;
 }
 
+message LastBlockNumberRequest {}
+
+message LastBlockNumberResponse {
+  int32 block_number = 1;
+}
+
 // SequencerService receives transactions, assigns sequence numbers, and lets nodes fetch transactions by sequence number.
 service SequencerService {
   // Broadcast submits one transaction to the sequencer. Returns the assigned sequence number.
@@ -32,4 +38,7 @@ service SequencerService {
 
   // DeliverBlock retrieves the block associated with a given sequence number.
   rpc DeliverBlock(DeliverBlockRequest) returns (DeliverBlockResponse);
+
+  // LastBlockNumber retrieves the latest block number.
+  rpc LastBlockNumber(LastBlockNumberRequest) returns (LastBlockNumberResponse);
 }

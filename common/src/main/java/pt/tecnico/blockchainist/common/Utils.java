@@ -75,7 +75,8 @@ public class Utils {
      * @return the protocol buffer Transaction object
      */
     public static pt.tecnico.blockchainist.contract.Transaction convertToProto(Transaction domainTx) {
-        var builder = pt.tecnico.blockchainist.contract.Transaction.newBuilder();
+        var builder = pt.tecnico.blockchainist.contract.Transaction.newBuilder()
+                .setTransactionId(domainTx.transactionId());
 
         switch (domainTx.type()) {
             case CREATE -> builder.setCreateWallet(CreateWalletRequest.newBuilder()
@@ -112,19 +113,22 @@ public class Utils {
                     proto.getCreateWallet().getUserId(),
                     "",
                     proto.getCreateWallet().getWalletId(),
-                    0);
+                    0,
+                    proto.getTransactionId());
             case DELETE_WALLET -> new Transaction(
                     Transaction.Type.DELETE,
                     proto.getDeleteWallet().getUserId(),
                     proto.getDeleteWallet().getWalletId(),
                     "",
-                    0);
+                    0,
+                    proto.getTransactionId());
             case TRANSFER -> new Transaction(
                     Transaction.Type.TRANSFER,
                     proto.getTransfer().getSrcUserId(),
                     proto.getTransfer().getSrcWalletId(),
                     proto.getTransfer().getDstWalletId(),
-                    proto.getTransfer().getValue());
+                    proto.getTransfer().getValue(),
+                    proto.getTransactionId());
             default -> throw new IllegalArgumentException("Unknown transaction type");
         };
     }

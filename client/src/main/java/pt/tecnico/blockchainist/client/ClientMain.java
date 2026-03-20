@@ -7,7 +7,8 @@ import pt.tecnico.blockchainist.common.Utils;
 
 /**
  * Main entry point for the blockchain client application.
- * This class initializes connections to blockchain nodes and starts the command processor
+ * This class initializes connections to blockchain nodes and starts the command
+ * processor
  * for user interaction.
  */
 public class ClientMain {
@@ -15,7 +16,8 @@ public class ClientMain {
     /**
      * Main method that parses command-line arguments and initializes the client.
      *
-     * @param args command-line arguments specifying node connection details format host:port:organization
+     * @param args command-line arguments specifying node connection details format
+     *             host:port:organization
      */
     public static void main(String[] args) {
 
@@ -48,7 +50,7 @@ public class ClientMain {
             }
             String organization = split[2];
 
-            nodes.add(new ClientNodeService(host, port, organization));
+            nodes.add(new ClientNodeService(host, port, organization, 15));
         }
 
         CommandProcessor processor = new CommandProcessor(nodes);
@@ -56,6 +58,7 @@ public class ClientMain {
     }
 
     private static void printUsage() {
-        System.err.println("Usage: mvn exec:java -Dexec.args=\"<host>:<port>:<organization> [<host>:<port>:<organization> ...]\"");
+        System.err.println(
+                "Usage: mvn exec:java -Dexec.args=\"<host>:<port>:<organization> [<host>:<port>:<organization> ...]\"");
     }
 }

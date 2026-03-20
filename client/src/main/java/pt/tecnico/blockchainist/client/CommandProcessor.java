@@ -3,20 +3,25 @@ package pt.tecnico.blockchainist.client;
 import java.util.ArrayList;
 import java.util.Scanner;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Supplier;
 import java.util.regex.Pattern;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.function.BiConsumer;
 
 import com.google.protobuf.Message;
 
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
 import pt.tecnico.blockchainist.client.grpc.ClientNodeService;
-import pt.tecnico.blockchainist.client.grpc.MessageObserver;
+import pt.tecnico.blockchainist.client.grpc.RetryObserver;
 import pt.tecnico.blockchainist.common.Utils;
-import pt.tecnico.blockchainist.contract.ReadBalanceResponse;
+import pt.tecnico.blockchainist.contract.*;
+import io.grpc.Status.Code;
 
 /**
  * Processes user commands for interacting with the blockchain.
+ * This class implements a command-line interface for executing blockchain
+ * operations
  * This class implements a command-line interface for executing blockchain
  * operations
  * such as wallet creation, deletion, transfers, and balance queries.
@@ -121,6 +126,7 @@ public class CommandProcessor {
      * Handles the create wallet command.
      *
      * @param split      the command arguments split by spaces
+     * @param split      the command arguments split by spaces
      * @param isBlocking whether the operation should block until completion
      */
     private void create(String[] split, boolean isBlocking) {
@@ -132,12 +138,14 @@ public class CommandProcessor {
         Integer nodeDelay = Integer.parseInt(split[4]);
 
         // Make the call
-        ClientNodeService node = nodes.get(nodeIndex);
+        String txId = UUID.randomUUID().toString();
         Utils.debug("Sending CreateWallet request to node %d: userId=%s, walletId=%s", nodeIndex, userId, walletId);
         if (isBlocking) {
-            execute(() -> node.createWallet(userId, walletId, nodeDelay));
+            executeWithRetry(nodeIndex, n -> n.createWallet(userId, walletId, nodeDelay, txId));
         } else {
-            node.createWalletAsync(userId, walletId, nodeDelay, createObserver());
+            executeAsyncWithRetry(nodeIndex,
+                    (ClientNodeService n, StreamObserver<CreateWalletResponse> obs) -> n.createWalletAsync(userId,
+                            walletId, nodeDelay, txId, obs));
         }
     }
 
@@ -156,12 +164,14 @@ public class CommandProcessor {
         Integer nodeDelay = Integer.parseInt(split[4]);
 
         // Make the call
-        ClientNodeService node = nodes.get(nodeIndex);
+        String txId = UUID.randomUUID().toString();
         Utils.debug("Sending DeleteWallet request to node %d: userId=%s, walletId=%s", nodeIndex, userId, walletId);
         if (isBlocking) {
-            execute(() -> node.deleteWallet(userId, walletId, nodeDelay));
+            executeWithRetry(nodeIndex, n -> n.deleteWallet(userId, walletId, nodeDelay, txId));
         } else {
-            node.deleteWalletAsync(userId, walletId, nodeDelay, createObserver());
+            executeAsyncWithRetry(nodeIndex,
+                    (ClientNodeService n, StreamObserver<DeleteWalletResponse> obs) -> n.deleteWalletAsync(userId,
+                            walletId, nodeDelay, txId, obs));
         }
     }
 
@@ -178,13 +188,13 @@ public class CommandProcessor {
         Integer nodeDelay = Integer.parseInt(split[3]);
 
         // Make the call
-        ClientNodeService node = nodes.get(nodeIndex);
-        execute(() -> node.readBalance(walletId, nodeDelay));
+        executeWithRetry(nodeIndex, n -> n.readBalance(walletId, nodeDelay));
     }
 
     /**
      * Handles the transfer command.
      *
+     * @param split      the command arguments split by spaces
      * @param split      the command arguments split by spaces
      * @param isBlocking whether the operation should block until completion
      */
@@ -199,13 +209,15 @@ public class CommandProcessor {
         Integer nodeDelay = Integer.parseInt(split[6]);
 
         // Make the call
-        ClientNodeService node = nodes.get(nodeIndex);
+        String txId = UUID.randomUUID().toString();
         Utils.debug("Sending Transfer request to node %d: userId=%s, srcWalletId=%s, dstWalletId=%s, amount=%d",
                 nodeIndex, userId, srcWalletId, dstWalletId, amount);
         if (isBlocking) {
-            execute(() -> node.transfer(userId, srcWalletId, dstWalletId, amount, nodeDelay));
+            executeWithRetry(nodeIndex, n -> n.transfer(userId, srcWalletId, dstWalletId, amount, nodeDelay, txId));
         } else {
-            node.transferAsync(userId, srcWalletId, dstWalletId, amount, nodeDelay, createObserver());
+            executeAsyncWithRetry(nodeIndex,
+                    (ClientNodeService n, StreamObserver<TransferResponse> obs) -> n.transferAsync(userId, srcWalletId,
+                            dstWalletId, amount, nodeDelay, txId, obs));
         }
     }
 
@@ -220,8 +232,7 @@ public class CommandProcessor {
         Integer nodeIndex = Integer.parseInt(split[1]);
 
         // Make the call
-        ClientNodeService node = nodes.get(nodeIndex);
-        execute(() -> node.getBlockchainState());
+        executeWithRetry(nodeIndex, n -> n.getBlockchainState());
     }
 
     /**
@@ -446,46 +457,59 @@ public class CommandProcessor {
     }
 
     /**
-     * Executes a gRPC call and handles the response or errors.
-     * Prints the command number and result to standard output.
-     *
-     * @param grpcCall the gRPC call to execute
+     * Executes a gRPC call synchronously and retries on other nodes if UNAVAILABLE
+     * or DEADLINE_EXCEEDED.
      */
-    private void execute(Supplier<Message> grpcCall) {
+    private void executeWithRetry(int initialNodeIndex, Function<ClientNodeService, Message> grpcCall) {
         Long commandNumber = this.commandCounter.incrementAndGet();
+        int attempts = 0;
+        int maxAttempts = nodes.size();
+        int currentNodeIndex = initialNodeIndex;
 
-        try {
-            // Print OK message
-            Message response = grpcCall.get();
-            System.out.println(commandNumber + " OK");
+        while (attempts < maxAttempts) {
+            try {
+                // Execute
+                ClientNodeService node = nodes.get(currentNodeIndex);
+                Message response = grpcCall.apply(node);
+                System.out.println(commandNumber + " OK");
 
-            // Handle balance
-            if (response instanceof ReadBalanceResponse readBalanceResponse) {
-                System.out.println("balance: " + readBalanceResponse.getBalance());
+                // Print response
+                if (response instanceof ReadBalanceResponse readBalanceResponse) {
+                    System.out.println("balance: " + readBalanceResponse.getBalance());
+                } else {
+                    String text = response.toString();
+                    if (!text.isBlank()) {
+                        System.out.println(text);
+                    }
+                }
                 return;
+            } catch (StatusRuntimeException e) {
+                Code code = e.getStatus().getCode();
+                if (code == Code.UNAVAILABLE || code == Code.DEADLINE_EXCEEDED) {
+                    System.err.println("[Retry] Command " + commandNumber + ": Node " + currentNodeIndex
+                            + " failed. Retrying on next node...");
+                    currentNodeIndex = (currentNodeIndex + 1) % nodes.size();
+                    attempts++;
+                } else {
+                    // Don't Retry on other errors
+                    System.err.println("[Error] " + commandNumber + ": " + e.getStatus().getDescription());
+                    return;
+                }
             }
-
-            // Print Response
-            String text = response.toString();
-            if (!text.isBlank()) {
-                System.out.println(text);
-            }
-
-        } catch (StatusRuntimeException e) {
-            // Handle error
-            System.err.println("[Error] " + commandNumber + ": " + e.getStatus().getDescription());
         }
+        System.err.println("[Error] " + commandNumber + ": All nodes failed.");
     }
 
     /**
-     * Generates a new command number and creates a generic StreamObserver
-     * to handle the async gRPC response.
-     *
-     * @param <T> the type of the gRPC response message
-     * @return a properly configured MessageObserver
+     * Executes a gRPC call asynchronously and retries on other nodes if UNAVAILABLE
+     * or DEADLINE_EXCEEDED.
      */
-    private <T> StreamObserver<T> createObserver() {
+    private <T extends Message> void executeAsyncWithRetry(int initialNodeIndex,
+            BiConsumer<ClientNodeService, StreamObserver<T>> grpcCall) {
         Long commandNumber = this.commandCounter.incrementAndGet();
-        return new MessageObserver<>(commandNumber);
+
+        // Execute
+        RetryObserver<T> retryObserver = new RetryObserver<>(commandNumber, nodes, initialNodeIndex, grpcCall);
+        grpcCall.accept(nodes.get(initialNodeIndex), retryObserver);
     }
 }

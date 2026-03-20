@@ -21,6 +21,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
 
     private final NodeState nodeState = new NodeState();
     private final NodeSequencerService sequencer;
+    private volatile boolean syncing = true;
+    private long syncingTarget = 0;
 
     /**
      * Constructs a new NodeServiceImpl and starts the background transaction
@@ -51,7 +53,12 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
             Utils.debug("Received CreateWallet request: userId=%s, walletId=%s",
                     request.getUserId(), request.getWalletId());
 
+            // Reject if syncing with sequencer
+            ensureReady();
+
             // Check
+            if (request.getTransactionId().isBlank())
+                throw new IllegalArgumentException("Transaction ID can't be blank");
             if (request.getUserId().isBlank())
                 throw new IllegalArgumentException("User ID can't be blank");
             if (request.getWalletId().isBlank())
@@ -63,7 +70,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     request.getUserId(),
                     "",
                     request.getWalletId(),
-                    0);
+                    0,
+                    request.getTransactionId());
             pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
 
             // Delay
@@ -76,7 +84,7 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
             int assignedSequence = seqRes.getSequenceNumber();
 
             // Wait
-            nodeState.waitForSequence(assignedSequence);
+            nodeState.waitForSequence(assignedSequence, request.getTransactionId());
 
             // Reply
             responseObserver.onNext(CreateWalletResponse.getDefaultInstance());
@@ -88,6 +96,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             responseObserver.onError(Status.INTERNAL.withDescription("Request interrupted").asRuntimeException());
+        } catch (IllegalStateException e) {
+            responseObserver.onError(Status.UNAVAILABLE.withDescription(e.getMessage()).asRuntimeException());
         }
     }
 
@@ -106,7 +116,12 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
             Utils.debug("Received DeleteWallet request: userId=%s, walletId=%s",
                     request.getUserId(), request.getWalletId());
 
+            // Reject if syncing with sequencer
+            ensureReady();
+
             // Check
+            if (request.getTransactionId().isBlank())
+                throw new IllegalArgumentException("Transaction ID can't be blank");
             if (request.getUserId().isBlank())
                 throw new IllegalArgumentException("User ID can't be blank");
             if (request.getWalletId().isBlank())
@@ -118,7 +133,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     request.getUserId(),
                     request.getWalletId(),
                     "",
-                    0);
+                    0,
+                    request.getTransactionId());
             pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
 
             // Delay
@@ -131,7 +147,7 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
             int assignedSequence = seqRes.getSequenceNumber();
 
             // Wait
-            nodeState.waitForSequence(assignedSequence);
+            nodeState.waitForSequence(assignedSequence, request.getTransactionId());
 
             // Reply
             responseObserver.onNext(DeleteWalletResponse.getDefaultInstance());
@@ -143,6 +159,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             responseObserver.onError(Status.INTERNAL.withDescription("Request interrupted").asRuntimeException());
+        } catch (IllegalStateException e) {
+            responseObserver.onError(Status.UNAVAILABLE.withDescription(e.getMessage()).asRuntimeException());
         }
     }
 
@@ -161,7 +179,12 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
             Utils.debug("Received Transfer request: userId=%s, srcWalletId=%s, dstWalletId=%s, amount=%d",
                     request.getSrcUserId(), request.getSrcWalletId(), request.getDstWalletId(), request.getValue());
 
+            // Reject if syncing with sequencer
+            ensureReady();
+
             // Check
+            if (request.getTransactionId().isBlank())
+                throw new IllegalArgumentException("Transaction ID can't be blank");
             if (request.getSrcUserId().isBlank())
                 throw new IllegalArgumentException("Source User ID can't be blank");
             if (request.getSrcWalletId().isBlank())
@@ -177,7 +200,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     request.getSrcUserId(),
                     request.getSrcWalletId(),
                     request.getDstWalletId(),
-                    request.getValue());
+                    request.getValue(),
+                    request.getTransactionId());
             pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
 
             // Delay
@@ -191,7 +215,7 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
             int assignedSequence = seqRes.getSequenceNumber();
 
             // Wait
-            nodeState.waitForSequence(assignedSequence);
+            nodeState.waitForSequence(assignedSequence, request.getTransactionId());
 
             // Reply
             responseObserver.onNext(TransferResponse.getDefaultInstance());
@@ -203,6 +227,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             responseObserver.onError(Status.INTERNAL.withDescription("Request interrupted").asRuntimeException());
+        } catch (IllegalStateException e) {
+            responseObserver.onError(Status.UNAVAILABLE.withDescription(e.getMessage()).asRuntimeException());
         }
     }
 
@@ -220,6 +246,9 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         try {
             // Log
             Utils.debug("Received ReadBalance request: walletId=%s", request.getWalletId());
+
+            // Reject if syncing with sequencer
+            ensureReady();
 
             // Check
             if (request.getWalletId().isBlank())
@@ -246,6 +275,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             responseObserver.onError(Status.INTERNAL.withDescription("Request interrupted").asRuntimeException());
+        } catch (IllegalStateException e) {
+            responseObserver.onError(Status.UNAVAILABLE.withDescription(e.getMessage()).asRuntimeException());
         }
     }
 
@@ -263,6 +294,9 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         try {
             // Log
             Utils.debug("Received BlockchainState request");
+
+            // Reject if syncing with sequencer
+            ensureReady();
 
             // Delay
             delayIfRequested();
@@ -283,15 +317,32 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             responseObserver.onError(Status.INTERNAL.withDescription("Request interrupted").asRuntimeException());
+        } catch (IllegalStateException e) {
+            responseObserver.onError(Status.UNAVAILABLE.withDescription(e.getMessage()).asRuntimeException());
         }
-
     }
 
+    /**
+     * Utility method to introduce an artificial delay in request processing if
+     * specified in the gRPC metadata headers.
+     *
+     * @throws InterruptedException if the thread is interrupted while sleeping
+     */
     private void delayIfRequested() throws InterruptedException {
         Integer delay = DelayInterceptor.DELAY_CONTEXT_KEY.get();
         if (delay != null && delay > 0) {
             Utils.debug("Delaying request by %d ms as per metadata header", delay);
             Thread.sleep(delay * 1000L);
+        }
+    }
+
+    /**
+     * Ensures that the node is ready to process requests by checking if it is still
+     * syncing with the sequencer.
+     */
+    private void ensureReady() {
+        if (syncing) {
+            throw new IllegalStateException("Node is syncing with sequencer. Please try again later.");
         }
     }
 
@@ -304,6 +355,18 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
                     int next = nodeState.getNextBlockNumber();
+
+                    // Reject transactions until synced with sequencer
+                    if (syncing && next >= syncingTarget) {
+                        int sequencerCurrent = sequencer.getLastBlockNumber().getBlockNumber();
+                        if (next > sequencerCurrent) {
+                            Utils.debug("Node is synced with sequencer (next=%d, sequencerCurrent=%d). Waiting...",
+                                    next, sequencerCurrent);
+                            syncing = false;
+                        } else {
+                            syncingTarget = sequencerCurrent + 1;
+                        }
+                    }
 
                     // Request Sequencer
                     DeliverBlockResponse response = sequencer.deliverBlock(next);

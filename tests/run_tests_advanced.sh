@@ -740,6 +740,215 @@ if [[ -d "${SCENARIOS_INPUTS}" ]]; then
 fi
 
 ##########################################
+# 3. RUN B2 INFRASTRUCTURE TESTS
+##########################################
+# Stop shared infrastructure, then run B2-specific tests that need
+# to control node lifecycle (late-join, failover, dedup).
+printf '\n%b  Stopping shared infrastructure for B2 tests...%b\n' "${C_DGRAY}" "${C_RESET}"
+for pid in "${ACTIVE_PROCS[@]:-}"; do
+  kill_process_tree "${pid}"
+done
+ACTIVE_PROCS=()
+sleep 1
+
+B2_SEQUENCER_PORT=3001
+B2_NODE_PORT_1=2011
+B2_NODE_PORT_2=2012
+B2_NODE_PORT_3=2013
+B2_FO_NODE_PORT_1=2021
+B2_FO_NODE_PORT_2=2022
+
+# Synchronous client runner — returns path to stdout file.
+run_client_sync() {
+  local input="$1" nodes="$2"
+  local out="${TEST_OUTPUTS}/b2-client-out-${RUN_SUFFIX}-$$.txt"
+  local err="${TEST_OUTPUTS}/b2-client-err-${RUN_SUFFIX}-$$.txt"
+  local arg_list=(--quiet -f "${MVN_ROOT_POM}" -pl client exec:java "-Dexec.args=${nodes}")
+  if [[ -n "${DEBUG_ARGS//[[:space:]]/}" ]]; then
+    arg_list+=("${DEBUG_ARGS}")
+  fi
+  "${MVN_EXE}" "${arg_list[@]}" <"${input}" >"${out}" 2>"${err}"
+  echo "${out}"
+}
+
+extract_b2_balances() {
+  grep "^balance:" "$1" || true
+}
+
+write_section "B2 Infrastructure Tests"
+
+#-----------------------------------------
+# B2-1: Late-join node sync
+#-----------------------------------------
+# Two nodes run transactions; a brand-new node 3 joins and must sync
+# the full blockchain before serving queries. Results must match node 1.
+t0_b2="$(date +%s)"
+
+start_mvn_background "sequencer-b2" "${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+b2_seq_pid="${STARTED_BG_PID}"
+ACTIVE_PROCS+=("${b2_seq_pid}")
+assert_service_started "sequencer-b2" "localhost" "${B2_SEQUENCER_PORT}" "${STARTED_BG_LOG_FILE}"
+
+start_mvn_background "node-b2-${B2_NODE_PORT_1}" "${B2_NODE_PORT_1} Org1 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+b2_node1_pid="${STARTED_BG_PID}"
+ACTIVE_PROCS+=("${b2_node1_pid}")
+assert_service_started "node-b2-${B2_NODE_PORT_1}" "localhost" "${B2_NODE_PORT_1}" "${STARTED_BG_LOG_FILE}"
+
+start_mvn_background "node-b2-${B2_NODE_PORT_2}" "${B2_NODE_PORT_2} Org2 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+ACTIVE_PROCS+=("${STARTED_BG_PID}")
+assert_service_started "node-b2-${B2_NODE_PORT_2}" "localhost" "${B2_NODE_PORT_2}" "${STARTED_BG_LOG_FILE}"
+
+B2_SEED_INPUT="$(mktemp)"
+cat >"${B2_SEED_INPUT}" <<'EOF'
+C Alice cA 0 0
+C Bob cB 0 0
+T BC bc cA 200 0 0
+T BC bc cB 150 1 0
+T Alice cA cB 50 0 0
+X
+EOF
+run_client_sync "${B2_SEED_INPUT}" "localhost:${B2_NODE_PORT_1}:Org1 localhost:${B2_NODE_PORT_2}:Org2" >/dev/null
+rm -f "${B2_SEED_INPUT}"
+
+printf '%b    Starting late-join node on port %s...%b\n' "${C_DGRAY}" "${B2_NODE_PORT_3}" "${C_RESET}"
+start_mvn_background "node-b2-${B2_NODE_PORT_3}" "${B2_NODE_PORT_3} Org3 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+ACTIVE_PROCS+=("${STARTED_BG_PID}")
+assert_service_started "node-b2-${B2_NODE_PORT_3}" "localhost" "${B2_NODE_PORT_3}" "${STARTED_BG_LOG_FILE}"
+
+B2_CHECK_INPUT="$(mktemp)"
+cat >"${B2_CHECK_INPUT}" <<'EOF'
+S cA 0 0
+S cB 0 0
+S bc 0 0
+X
+EOF
+B2_OUT_N1="$(run_client_sync "${B2_CHECK_INPUT}" "localhost:${B2_NODE_PORT_1}:Org1")"
+B2_OUT_N3="$(run_client_sync "${B2_CHECK_INPUT}" "localhost:${B2_NODE_PORT_3}:Org3")"
+rm -f "${B2_CHECK_INPUT}"
+
+B2_BAL_N1="$(extract_b2_balances "${B2_OUT_N1}")"
+B2_BAL_N3="$(extract_b2_balances "${B2_OUT_N3}")"
+elapsed_b21=$(( $(date +%s) - t0_b2 ))
+
+if [[ "${B2_BAL_N1}" == "${B2_BAL_N3}" ]] && [[ -n "${B2_BAL_N1}" ]]; then
+  add_result "B2/late-join-sync" "PASSED" "${elapsed_b21}s" "balances match node 1"
+else
+  add_result "B2/late-join-sync" "FAILED" "${elapsed_b21}s" "node1=[${B2_BAL_N1}] node3=[${B2_BAL_N3}]"
+fi
+
+B2_EXPECTED_SYNC="balance: 150
+balance: 200
+balance: 650"
+if [[ "${B2_BAL_N3}" == "${B2_EXPECTED_SYNC}" ]]; then
+  add_result "B2/late-join-balances" "PASSED" "${elapsed_b21}s" "cA=150 cB=200 bc=650"
+else
+  add_result "B2/late-join-balances" "FAILED" "${elapsed_b21}s" "expected [$(echo "${B2_EXPECTED_SYNC}" | tr '\n' '|')] got [$(echo "${B2_BAL_N3}" | tr '\n' '|')]"
+fi
+
+#-----------------------------------------
+# B2-2: Client failover (dead node → retry)
+#-----------------------------------------
+# Node 1 is killed. Client configured with [node1, node2] must succeed
+# by automatically retrying on node 2.
+for pid in "${ACTIVE_PROCS[@]:-}"; do
+  kill_process_tree "${pid}"
+done
+ACTIVE_PROCS=()
+sleep 1
+
+start_mvn_background "sequencer-b2" "${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+b2_seq_pid="${STARTED_BG_PID}"
+ACTIVE_PROCS+=("${b2_seq_pid}")
+assert_service_started "sequencer-b2" "localhost" "${B2_SEQUENCER_PORT}" "${STARTED_BG_LOG_FILE}"
+
+start_mvn_background "node-b2-${B2_FO_NODE_PORT_1}" "${B2_FO_NODE_PORT_1} Org1 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+b2_fo1_pid="${STARTED_BG_PID}"
+ACTIVE_PROCS+=("${b2_fo1_pid}")
+assert_service_started "node-b2-${B2_FO_NODE_PORT_1}" "localhost" "${B2_FO_NODE_PORT_1}" "${STARTED_BG_LOG_FILE}"
+
+start_mvn_background "node-b2-${B2_FO_NODE_PORT_2}" "${B2_FO_NODE_PORT_2} Org2 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+b2_fo2_pid="${STARTED_BG_PID}"
+ACTIVE_PROCS+=("${b2_fo2_pid}")
+assert_service_started "node-b2-${B2_FO_NODE_PORT_2}" "localhost" "${B2_FO_NODE_PORT_2}" "${STARTED_BG_LOG_FILE}"
+
+B2_FO_NODES="localhost:${B2_FO_NODE_PORT_1}:Org1 localhost:${B2_FO_NODE_PORT_2}:Org2"
+
+B2_INIT_INPUT="$(mktemp)"
+cat >"${B2_INIT_INPUT}" <<'EOF'
+C Alice cA 0 0
+T BC bc cA 500 0 0
+X
+EOF
+run_client_sync "${B2_INIT_INPUT}" "${B2_FO_NODES}" >/dev/null
+rm -f "${B2_INIT_INPUT}"
+
+printf '%b    Killing fo-node1 (port %s)...%b\n' "${C_DGRAY}" "${B2_FO_NODE_PORT_1}" "${C_RESET}"
+kill_process_tree "${b2_fo1_pid}"
+# Remove from active procs so cleanup doesn't re-kill it
+ACTIVE_PROCS=("${b2_seq_pid}" "${b2_fo2_pid}")
+sleep 1
+
+t0_fo="$(date +%s)"
+B2_FAILOVER_INPUT="$(mktemp)"
+cat >"${B2_FAILOVER_INPUT}" <<'EOF'
+T Alice cA bc 100 0 0
+S cA 0 0
+S bc 0 0
+X
+EOF
+B2_FO_OUT="$(run_client_sync "${B2_FAILOVER_INPUT}" "${B2_FO_NODES}")"
+rm -f "${B2_FAILOVER_INPUT}"
+elapsed_fo=$(( $(date +%s) - t0_fo ))
+
+B2_FO_BALANCES="$(extract_b2_balances "${B2_FO_OUT}")"
+B2_EXPECTED_FO="balance: 400
+balance: 600"
+
+if echo "${B2_FO_BALANCES}" | grep -q "balance: 400"; then
+  add_result "B2/failover-transfer" "PASSED" "${elapsed_fo}s" "transfer succeeded despite dead node"
+else
+  add_result "B2/failover-transfer" "FAILED" "${elapsed_fo}s" "output: $(cat "${B2_FO_OUT}")"
+fi
+
+if [[ "${B2_FO_BALANCES}" == "${B2_EXPECTED_FO}" ]]; then
+  add_result "B2/failover-balances" "PASSED" "${elapsed_fo}s" "cA=400 bc=600"
+else
+  add_result "B2/failover-balances" "FAILED" "${elapsed_fo}s" "expected [$(echo "${B2_EXPECTED_FO}" | tr '\n' '|')] got [$(echo "${B2_FO_BALANCES}" | tr '\n' '|')]"
+fi
+
+#-----------------------------------------
+# B2-3: Deduplication / cross-node consistency
+#-----------------------------------------
+# Normal operations through the surviving node must produce correct final
+# state — no phantom duplicate entries from the sequencer's request-ID dedup.
+t0_dedup="$(date +%s)"
+B2_DEDUP_INPUT="$(mktemp)"
+cat >"${B2_DEDUP_INPUT}" <<'EOF'
+C Carol cC 1 0
+T BC bc cC 300 0 0
+T Carol cC bc 300 1 0
+E Carol cC 1 0
+S bc 0 0
+S bc 1 0
+X
+EOF
+B2_DEDUP_OUT="$(run_client_sync "${B2_DEDUP_INPUT}" "${B2_FO_NODES}")"
+rm -f "${B2_DEDUP_INPUT}"
+elapsed_dedup=$(( $(date +%s) - t0_dedup ))
+
+B2_DEDUP_BAL="$(extract_b2_balances "${B2_DEDUP_OUT}")"
+B2_EXPECTED_DEDUP="balance: 600
+balance: 600"
+
+if [[ "${B2_DEDUP_BAL}" == "${B2_EXPECTED_DEDUP}" ]]; then
+  add_result "B2/dedup-consistency" "PASSED" "${elapsed_dedup}s" "state consistent after create/transfer/delete cycle"
+else
+  add_result "B2/dedup-consistency" "FAILED" "${elapsed_dedup}s" "expected [$(echo "${B2_EXPECTED_DEDUP}" | tr '\n' '|')] got [$(echo "${B2_DEDUP_BAL}" | tr '\n' '|')]"
+fi
+
+######################################
+
+##########################################
 # Summary generation
 ##########################################
 TOTAL_ELAPSED=$(( $(date +%s) - START_TIME ))

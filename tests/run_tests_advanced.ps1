@@ -540,6 +540,217 @@ try {
         }
     }
 
+    # ==========================================
+    # 3. RUN B2 INFRASTRUCTURE TESTS
+    # ==========================================
+    Write-Host "`n  Stopping shared infrastructure for B2 tests..." -ForegroundColor DarkGray
+    foreach ($p in $activeProcs) { Stop-ProcessTree $p }
+    $activeProcs = @()
+    Start-Sleep -Seconds 1
+
+    $B2_SEQUENCER_PORT = 3001
+    $B2_NODE_PORT_1 = 2011
+    $B2_NODE_PORT_2 = 2012
+    $B2_NODE_PORT_3 = 2013
+    $B2_FO_NODE_PORT_1 = 2021
+    $B2_FO_NODE_PORT_2 = 2022
+
+    function Invoke-ClientSync([string]$inputContent, [string]$nodes) {
+        $outFile = Join-Path $TEST_OUTPUTS "b2-client-out-${RUN_SUFFIX}-$PID-$(Get-Random).txt"
+        $errFile = Join-Path $TEST_OUTPUTS "b2-client-err-${RUN_SUFFIX}-$PID-$(Get-Random).txt"
+        
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = $MVN_EXE
+        $allArgs = "--quiet -f `"$MVN_ROOT_POM`" -pl client exec:java -Dexec.args=`"$nodes`""
+        if ($debugArgs) { $allArgs += " $debugArgs" }
+        $psi.Arguments = $allArgs
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardInput = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $proc.StandardInput.Write($inputContent)
+        $proc.StandardInput.Close()
+        
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+        $proc.WaitForExit()
+
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
+
+        [System.IO.File]::WriteAllText($outFile, $stdout)
+        [System.IO.File]::WriteAllText($errFile, $stderr)
+        return $outFile
+    }
+
+    function Extract-B2Balances([string]$outFile) {
+        $content = Get-Content $outFile -ErrorAction SilentlyContinue
+        if ($content) {
+            $balances = @($content | Where-Object { $_ -match "^balance:" })
+            return ($balances -join "`n").Trim()
+        }
+        return ""
+    }
+
+    Write-Section "B2 Infrastructure Tests"
+
+    #-----------------------------------------
+    # B2-1: Late-join node sync
+    #-----------------------------------------
+    $t0_b2 = Get-Date
+
+    $b2SeqInfo = Start-MvnBackground "sequencer-b2" "$B2_SEQUENCER_PORT" $debugArgs
+    $b2_seq_pid = $b2SeqInfo.Process
+    $activeProcs += $b2_seq_pid
+    Assert-ServiceStarted "sequencer-b2" "localhost" $B2_SEQUENCER_PORT $b2SeqInfo
+
+    $b2Node1Info = Start-MvnBackground "node-b2-$B2_NODE_PORT_1" "$B2_NODE_PORT_1 Org1 localhost:$B2_SEQUENCER_PORT" $debugArgs
+    $b2_node1_pid = $b2Node1Info.Process
+    $activeProcs += $b2_node1_pid
+    Assert-ServiceStarted "node-b2-$B2_NODE_PORT_1" "localhost" $B2_NODE_PORT_1 $b2Node1Info
+
+    $b2Node2Info = Start-MvnBackground "node-b2-$B2_NODE_PORT_2" "$B2_NODE_PORT_2 Org2 localhost:$B2_SEQUENCER_PORT" $debugArgs
+    $b2_node2_pid = $b2Node2Info.Process
+    $activeProcs += $b2_node2_pid
+    Assert-ServiceStarted "node-b2-$B2_NODE_PORT_2" "localhost" $B2_NODE_PORT_2 $b2Node2Info
+
+    $b2SeedInput = @"
+C Alice cA 0 0
+C Bob cB 0 0
+T BC bc cA 200 0 0
+T BC bc cB 150 1 0
+T Alice cA cB 50 0 0
+X
+"@
+    Invoke-ClientSync $b2SeedInput "localhost:${B2_NODE_PORT_1}:Org1 localhost:${B2_NODE_PORT_2}:Org2" | Out-Null
+
+    Write-Host "    Starting late-join node on port $B2_NODE_PORT_3..." -ForegroundColor DarkGray
+    $b2Node3Info = Start-MvnBackground "node-b2-$B2_NODE_PORT_3" "$B2_NODE_PORT_3 Org3 localhost:$B2_SEQUENCER_PORT" $debugArgs
+    $b2_node3_pid = $b2Node3Info.Process
+    $activeProcs += $b2_node3_pid
+    Assert-ServiceStarted "node-b2-$B2_NODE_PORT_3" "localhost" $B2_NODE_PORT_3 $b2Node3Info
+
+    $b2CheckInput = @"
+S cA 0 0
+S cB 0 0
+S bc 0 0
+X
+"@
+    $b2OutN1 = Invoke-ClientSync $b2CheckInput "localhost:${B2_NODE_PORT_1}:Org1"
+    $b2OutN3 = Invoke-ClientSync $b2CheckInput "localhost:${B2_NODE_PORT_3}:Org3"
+
+    $b2BalN1 = Extract-B2Balances $b2OutN1
+    $b2BalN3 = Extract-B2Balances $b2OutN3
+    $elapsedB21 = "$([Math]::Round(((Get-Date) - $t0_b2).TotalSeconds, 2))s"
+
+    $b2BalN1Norm = ($b2BalN1 -replace "`r", "").Trim()
+    $b2BalN3Norm = ($b2BalN3 -replace "`r", "").Trim()
+
+    if ($b2BalN1Norm -eq $b2BalN3Norm -and -not [string]::IsNullOrEmpty($b2BalN1Norm)) {
+        $results += [PSCustomObject]@{ Label="B2/late-join-sync"; Status="PASSED"; Time=$elapsedB21; Reason="balances match node 1" }
+    } else {
+        $results += [PSCustomObject]@{ Label="B2/late-join-sync"; Status="FAILED"; Time=$elapsedB21; Reason="node1=[$($b2BalN1Norm -replace "`n", "|")] node3=[$($b2BalN3Norm -replace "`n", "|")]" }
+    }
+
+    $b2ExpectedSync = "balance: 150`nbalance: 200`nbalance: 650"
+    if ($b2BalN3Norm -eq $b2ExpectedSync) {
+        $results += [PSCustomObject]@{ Label="B2/late-join-balances"; Status="PASSED"; Time=$elapsedB21; Reason="cA=150 cB=200 bc=650" }
+    } else {
+        $results += [PSCustomObject]@{ Label="B2/late-join-balances"; Status="FAILED"; Time=$elapsedB21; Reason="expected [$($b2ExpectedSync -replace "`n", "|")] got [$($b2BalN3Norm -replace "`n", "|")]" }
+    }
+
+    #-----------------------------------------
+    # B2-2: Client failover (dead node → retry)
+    #-----------------------------------------
+    foreach ($p in $activeProcs) { Stop-ProcessTree $p }
+    $activeProcs = @()
+    Start-Sleep -Seconds 1
+
+    $b2SeqInfo = Start-MvnBackground "sequencer-b2" "$B2_SEQUENCER_PORT" $debugArgs
+    $b2_seq_pid = $b2SeqInfo.Process
+    $activeProcs += $b2_seq_pid
+    Assert-ServiceStarted "sequencer-b2" "localhost" $B2_SEQUENCER_PORT $b2SeqInfo
+
+    $b2Fo1Info = Start-MvnBackground "node-b2-$B2_FO_NODE_PORT_1" "$B2_FO_NODE_PORT_1 Org1 localhost:$B2_SEQUENCER_PORT" $debugArgs
+    $b2_fo1_pid = $b2Fo1Info.Process
+    $activeProcs += $b2_fo1_pid
+    Assert-ServiceStarted "node-b2-$B2_FO_NODE_PORT_1" "localhost" $B2_FO_NODE_PORT_1 $b2Fo1Info
+
+    $b2Fo2Info = Start-MvnBackground "node-b2-$B2_FO_NODE_PORT_2" "$B2_FO_NODE_PORT_2 Org2 localhost:$B2_SEQUENCER_PORT" $debugArgs
+    $b2_fo2_pid = $b2Fo2Info.Process
+    $activeProcs += $b2_fo2_pid
+    Assert-ServiceStarted "node-b2-$B2_FO_NODE_PORT_2" "localhost" $B2_FO_NODE_PORT_2 $b2Fo2Info
+
+    $b2FoNodes = "localhost:${B2_FO_NODE_PORT_1}:Org1 localhost:${B2_FO_NODE_PORT_2}:Org2"
+
+    $b2InitInput = @"
+C Alice cA 0 0
+T BC bc cA 500 0 0
+X
+"@
+    Invoke-ClientSync $b2InitInput $b2FoNodes | Out-Null
+
+    Write-Host "    Killing fo-node1 (port $B2_FO_NODE_PORT_1)..." -ForegroundColor DarkGray
+    Stop-ProcessTree $b2_fo1_pid
+    $activeProcs = @($b2_seq_pid, $b2_fo2_pid)
+    Start-Sleep -Seconds 1
+
+    $t0_fo = Get-Date
+    $b2FailoverInput = @"
+T Alice cA bc 100 0 0
+S cA 0 0
+S bc 0 0
+X
+"@
+    $b2FoOut = Invoke-ClientSync $b2FailoverInput $b2FoNodes
+    $elapsedFo = "$([Math]::Round(((Get-Date) - $t0_fo).TotalSeconds, 2))s"
+
+    $b2FoBalances = Extract-B2Balances $b2FoOut
+    $b2FoBalancesNorm = ($b2FoBalances -replace "`r", "").Trim()
+    $b2ExpectedFo = "balance: 400`nbalance: 600"
+
+    if ($b2FoBalancesNorm -match "balance: 400") {
+        $results += [PSCustomObject]@{ Label="B2/failover-transfer"; Status="PASSED"; Time=$elapsedFo; Reason="transfer succeeded despite dead node" }
+    } else {
+        $outContent = Get-Content $b2FoOut -Raw -ErrorAction SilentlyContinue | Out-String
+        $results += [PSCustomObject]@{ Label="B2/failover-transfer"; Status="FAILED"; Time=$elapsedFo; Reason="output: $($outContent -replace "`n", "|")" }
+    }
+
+    if ($b2FoBalancesNorm -eq $b2ExpectedFo) {
+        $results += [PSCustomObject]@{ Label="B2/failover-balances"; Status="PASSED"; Time=$elapsedFo; Reason="cA=400 bc=600" }
+    } else {
+        $results += [PSCustomObject]@{ Label="B2/failover-balances"; Status="FAILED"; Time=$elapsedFo; Reason="expected [$($b2ExpectedFo -replace "`n", "|")] got [$($b2FoBalancesNorm -replace "`n", "|")]" }
+    }
+
+
+    #-----------------------------------------
+    # B2-3: Deduplication / cross-node consistency
+    #-----------------------------------------
+    $t0_dedup = Get-Date
+    $b2DedupInput = @"
+C Carol cC 1 0
+T BC bc cC 300 0 0
+T Carol cC bc 300 1 0
+E Carol cC 1 0
+S bc 0 0
+S bc 1 0
+X
+"@
+    $b2DedupOut = Invoke-ClientSync $b2DedupInput $b2FoNodes
+    $elapsedDedup = "$([Math]::Round(((Get-Date) - $t0_dedup).TotalSeconds, 2))s"
+
+    $b2DedupBal = Extract-B2Balances $b2DedupOut
+    $b2DedupBalNorm = ($b2DedupBal -replace "`r", "").Trim()
+    $b2ExpectedDedup = "balance: 600`nbalance: 600"
+
+    if ($b2DedupBalNorm -eq $b2ExpectedDedup) {
+        $results += [PSCustomObject]@{ Label="B2/dedup-consistency"; Status="PASSED"; Time=$elapsedDedup; Reason="state consistent after create/transfer/delete cycle" }
+    } else {
+        $results += [PSCustomObject]@{ Label="B2/dedup-consistency"; Status="FAILED"; Time=$elapsedDedup; Reason="expected [$($b2ExpectedDedup -replace "`n", "|")] got [$($b2DedupBalNorm -replace "`n", "|")]" }
+    }
+
     # Summary Generation
     $totalElapsed = [Math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
     $passed = @($results | Where-Object Status -eq 'PASSED').Count

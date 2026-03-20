@@ -96,7 +96,24 @@ public class SequencerServiceImpl extends SequencerServiceGrpc.SequencerServiceI
             responseObserver.onError(
                     Status.INTERNAL.withDescription("Thread interrupted while waiting for block").asRuntimeException());
         }
+    }
 
+    /**
+     * Handles last block number requests from nodes.
+     * Returns the number of the last completed block.
+     *
+     * @param request          the request for the last block number
+     * @param responseObserver the observer to send the block number back to the node
+     */
+    @Override
+    public void lastBlockNumber(LastBlockNumberRequest request, StreamObserver<LastBlockNumberResponse> responseObserver) {
+        try {
+            int lastBlockNum = seqState.getLastBlockNumber();
+            responseObserver.onNext(LastBlockNumberResponse.newBuilder().setBlockNumber(lastBlockNum).build());
+            responseObserver.onCompleted();
+        } catch (Exception e) {
+            responseObserver.onError(Status.INTERNAL.withDescription("Error retrieving last block number").asRuntimeException());
+        }
     }
 
 }
