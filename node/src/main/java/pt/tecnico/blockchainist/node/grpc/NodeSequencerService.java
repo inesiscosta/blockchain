@@ -6,24 +6,25 @@ import io.grpc.ManagedChannelBuilder;
 
 /**
  * Service class for node-to-sequencer gRPC communication.
- * This class provides a simplified interface for nodes to interact with the sequencer,
- * wrapping gRPC calls for broadcasting and delivering transactions.
+ * This class provides a simplified interface for nodes to interact with the
+ * sequencer, wrapping gRPC calls for broadcasting and delivering transactions.
  */
 public class NodeSequencerService {
     private final ManagedChannel channel;
     private final SequencerServiceGrpc.SequencerServiceBlockingStub blockingStub;
 
     /**
-     * Constructs a new NodeSequencerService and establishes a connection to the sequencer.
+     * Constructs a new NodeSequencerService and establishes a connection to the
+     * sequencer.
      *
      * @param host the hostname or IP address of the sequencer
      * @param port the port number on which the sequencer is listening
      */
     public NodeSequencerService(String host, int port) {
-        // 1. Open the connection
+        // Open the connection
         this.channel = ManagedChannelBuilder.forAddress(host, port).usePlaintext().build();
 
-        // 2. Create the blocking stub
+        // Create the blocking stub
         this.blockingStub = SequencerServiceGrpc.newBlockingStub(channel);
     }
 
@@ -41,14 +42,14 @@ public class NodeSequencerService {
     }
 
     /**
-     * Requests a transaction from the sequencer by its sequence number.
+     * Requests a block from the sequencer by its number.
      *
-     * @param seq_num the sequence number of the transaction to retrieve
-     * @return DeliverTransactionResponse containing the transaction if available
+     * @param blockNum the number of the block to retrieve
+     * @return DeliverBlockResponse containing the block if available
      */
-    public DeliverTransactionResponse deliverTransaction(int seq_num) {
-        DeliverTransactionRequest request = DeliverTransactionRequest.newBuilder().setSequenceNumber(seq_num).build();
-        return blockingStub.deliverTransaction(request);
+    public DeliverBlockResponse deliverBlock(int blockNum) {
+        DeliverBlockRequest request = DeliverBlockRequest.newBuilder().setBlockNumber(blockNum).build();
+        return blockingStub.deliverBlock(request);
     }
 
     /**

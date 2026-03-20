@@ -10,8 +10,10 @@ import pt.tecnico.blockchainist.common.Utils;
 
 /**
  * Manages the state of the blockchain node.
- * This class maintains the wallet registry, transaction ledger, and handles transaction execution.
- * All public methods are synchronized to ensure thread-safe state modifications.
+ * This class maintains the wallet registry, transaction ledger, and handles
+ * transaction execution.
+ * All public methods are synchronized to ensure thread-safe state
+ * modifications.
  */
 public class NodeState {
 
@@ -28,6 +30,7 @@ public class NodeState {
     private final List<Transaction> ledger = new ArrayList<>();
     private final Map<Integer, IllegalArgumentException> executionErrors = new HashMap<>();
     private int currentSequence = 0;
+    private int currentBlock = 0;
 
     /**
      * Constructs a new NodeState and initializes it with the bank's default wallet.
@@ -39,7 +42,7 @@ public class NodeState {
     /**
      * Creates a new wallet for a user.
      *
-     * @param userId the user ID requesting the new wallet
+     * @param userId   the user ID requesting the new wallet
      * @param walletId the unique identifier for the new wallet
      * @throws IllegalArgumentException if the wallet already exists
      */
@@ -59,9 +62,10 @@ public class NodeState {
     /**
      * Deletes an existing wallet.
      *
-     * @param userId the user ID requesting the deletion
+     * @param userId   the user ID requesting the deletion
      * @param walletId the wallet ID to delete
-     * @throws IllegalArgumentException if wallet not found, has positive balance, or user is not the owner
+     * @throws IllegalArgumentException if wallet not found, has positive balance,
+     *                                  or user is not the owner
      */
     private void deleteWallet(String userId, String walletId) {
         // Check
@@ -83,11 +87,12 @@ public class NodeState {
     /**
      * Transfers funds from one wallet to another.
      *
-     * @param srcUserId the user ID initiating the transfer
+     * @param srcUserId   the user ID initiating the transfer
      * @param srcWalletId the source wallet ID
      * @param dstWalletId the destination wallet ID
-     * @param amount the amount to transfer
-     * @throws IllegalArgumentException if wallets not found, insufficient funds, invalid amount, or user is not the owner
+     * @param amount      the amount to transfer
+     * @throws IllegalArgumentException if wallets not found, insufficient funds,
+     *                                  invalid amount, or user is not the owner
      */
     private void transfer(String srcUserId, String srcWalletId, String dstWalletId, long amount) {
         // Check
@@ -140,7 +145,7 @@ public class NodeState {
      * Applies a transaction to the blockchain state.
      * Execution errors are stored and later thrown in the requesting thread.
      *
-     * @param tx the transaction to apply
+     * @param tx     the transaction to apply
      * @param seqNum the sequence number of the transaction
      */
     public synchronized void applyTransaction(Transaction tx, int seqNum) {
@@ -172,12 +177,26 @@ public class NodeState {
     }
 
     /**
+     * Applies a block of transactions to the blockchain state.
+     *
+     * @param block the list of transactions to apply
+     */
+    public synchronized void applyBlock(List<Transaction> block) {
+        for (Transaction tx : block) {
+            applyTransaction(tx, currentSequence + 1);
+        }
+        currentBlock++;
+    }
+
+    /**
      * Waits until a specific sequence number has been processed.
-     * If the transaction at the target sequence failed, the stored exception is thrown.
+     * If the transaction at the target sequence failed, the stored exception is
+     * thrown.
      *
      * @param target the sequence number to wait for
-     * @throws InterruptedException if the thread is interrupted while waiting
-     * @throws IllegalArgumentException if the transaction at the target sequence number failed
+     * @throws InterruptedException     if the thread is interrupted while waiting
+     * @throws IllegalArgumentException if the transaction at the target sequence
+     *                                  number failed
      */
     public synchronized void waitForSequence(int target) throws InterruptedException {
         while (currentSequence < target) {
@@ -191,12 +210,12 @@ public class NodeState {
     }
 
     /**
-     * Returns the next expected sequence number.
+     * Returns the next expected block number.
      *
-     * @return the next sequence number to be processed
+     * @return the next block number to be processed
      */
-    public synchronized int getNextSequenceNumber() {
-        return currentSequence + 1;
+    public synchronized int getNextBlockNumber() {
+        return currentBlock + 1;
     }
 
 }

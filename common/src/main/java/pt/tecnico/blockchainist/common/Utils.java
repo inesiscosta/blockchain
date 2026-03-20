@@ -6,7 +6,8 @@ import pt.tecnico.blockchainist.contract.TransferRequest;
 
 /**
  * Utility class providing common helper methods for the blockchain system.
- * Includes debugging utilities and conversion methods between domain and protocol buffer representations.
+ * Includes debugging utilities and conversion methods between domain and
+ * protocol buffer representations.
  */
 public class Utils {
 
@@ -17,7 +18,7 @@ public class Utils {
      * Debug mode is activated by setting the "debug" system property.
      *
      * @param format the format string (printf-style)
-     * @param args the arguments referenced by the format specifiers
+     * @param args   the arguments referenced by the format specifiers
      */
     public static void debug(String format, Object... args) {
         if (DEBUG)
@@ -28,9 +29,11 @@ public class Utils {
      * Parses and validates a port number string.
      *
      * @param portStr the port number as a string
-     * @param name descriptive name for error messages (e.g., "node", "sequencer")
+     * @param name    descriptive name for error messages (e.g., "node",
+     *                "sequencer")
      * @return the validated port number
-     * @throws IllegalArgumentException if the port is invalid or out of range (0-65535)
+     * @throws IllegalArgumentException if the port is invalid or out of range
+     *                                  (0-65535)
      */
     public static int parsePort(String portStr, String name) {
         try {
@@ -41,6 +44,27 @@ public class Utils {
             return p;
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("Invalid " + name + " port: " + portStr);
+        }
+    }
+
+    /**
+     * Parses and validates a positive integer string.
+     * 
+     * @param intStr the integer as a string
+     * @param name   descriptive name for error messages (e.g., "block
+     *               transactions", "block time")
+     * @return the validated positive integer
+     * @throws IllegalArgumentException if the integer is invalid or not positive
+     */
+    public static int parsePositiveInt(String intStr, String name) {
+        try {
+            int value = Integer.parseInt(intStr);
+            if (value <= 0) {
+                throw new IllegalArgumentException(name + " must be a positive integer: " + intStr);
+            }
+            return value;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid " + name + ": " + intStr);
         }
     }
 

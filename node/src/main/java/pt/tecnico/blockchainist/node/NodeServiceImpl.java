@@ -5,6 +5,7 @@ import pt.tecnico.blockchainist.contract.*;
 import pt.tecnico.blockchainist.node.domain.NodeState;
 import pt.tecnico.blockchainist.common.Transaction;
 import pt.tecnico.blockchainist.common.Utils;
+import pt.tecnico.blockchainist.node.grpc.DelayInterceptor;
 import pt.tecnico.blockchainist.node.grpc.NodeSequencerService;
 
 import java.util.List;
@@ -12,7 +13,8 @@ import io.grpc.Status;
 
 /**
  * Implementation of the node gRPC service.
- * This class handles client requests for blockchain operations by coordinating with the sequencer
+ * This class handles client requests for blockchain operations by coordinating
+ * with the sequencer
  * and managing the local blockchain state.
  */
 public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
@@ -21,10 +23,11 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
     private final NodeSequencerService sequencer;
 
     /**
-     * Constructs a new NodeServiceImpl and starts the background transaction fetcher.
+     * Constructs a new NodeServiceImpl and starts the background transaction
+     * fetcher.
      *
      * @param organization the organization identifier for this node
-     * @param sequencer the service for communicating with the sequencer
+     * @param sequencer    the service for communicating with the sequencer
      */
     public NodeServiceImpl(String organization, NodeSequencerService sequencer) {
         this.sequencer = sequencer;
@@ -37,7 +40,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
      * Handles wallet creation requests from clients.
      * Sends the transaction to the sequencer and waits for it to be processed.
      *
-     * @param request the create wallet request containing user and wallet identifiers
+     * @param request          the create wallet request containing user and wallet
+     *                         identifiers
      * @param responseObserver the observer to send the response back to the client
      */
     @Override
@@ -61,6 +65,9 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     request.getWalletId(),
                     0);
             pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
+
+            // Delay
+            delayIfRequested();
 
             // Request Sequencer
             Utils.debug("Sending transaction to sequencer: CREATE userId=%s walletId=%s",
@@ -88,7 +95,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
      * Handles wallet deletion requests from clients.
      * Sends the transaction to the sequencer and waits for it to be processed.
      *
-     * @param request the delete wallet request containing user and wallet identifiers
+     * @param request          the delete wallet request containing user and wallet
+     *                         identifiers
      * @param responseObserver the observer to send the response back to the client
      */
     @Override
@@ -112,6 +120,9 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     "",
                     0);
             pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
+
+            // Delay
+            delayIfRequested();
 
             // Request Sequencer
             Utils.debug("Sending transaction to sequencer: DELETE userId=%s walletId=%s",
@@ -139,7 +150,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
      * Handles transfer requests from clients.
      * Sends the transaction to the sequencer and waits for it to be processed.
      *
-     * @param request the transfer request containing source, destination, and amount information
+     * @param request          the transfer request containing source, destination,
+     *                         and amount information
      * @param responseObserver the observer to send the response back to the client
      */
     @Override
@@ -168,6 +180,9 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     request.getValue());
             pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
 
+            // Delay
+            delayIfRequested();
+
             // Request Sequencer
             Utils.debug(
                     "Sending transaction to sequencer: TRANSFER userId=%s, srcWalletId=%s, dstWalletId=%s, amount=%d",
@@ -195,8 +210,10 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
      * Handles read balance requests from clients.
      * This is a read-only operation that queries the current node state.
      *
-     * @param request the read balance request containing the wallet identifier
-     * @param responseObserver the observer to send the balance response back to the client
+     * @param request          the read balance request containing the wallet
+     *                         identifier
+     * @param responseObserver the observer to send the balance response back to the
+     *                         client
      */
     @Override
     public void readBalance(ReadBalanceRequest request, StreamObserver<ReadBalanceResponse> responseObserver) {
@@ -207,6 +224,9 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
             // Check
             if (request.getWalletId().isBlank())
                 throw new IllegalArgumentException("Wallet ID can't be blank");
+
+            // Delay
+            delayIfRequested();
 
             // Execute
             long balance = nodeState.readBalance(request.getWalletId());
@@ -223,6 +243,9 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
         } catch (IllegalArgumentException e) {
             // Error Handling
             responseObserver.onError(Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            responseObserver.onError(Status.INTERNAL.withDescription("Request interrupted").asRuntimeException());
         }
     }
 
@@ -230,49 +253,67 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
      * Handles blockchain state requests from clients.
      * Returns the complete transaction history stored in the node.
      *
-     * @param request the blockchain state request
-     * @param responseObserver the observer to send the blockchain state back to the client
+     * @param request          the blockchain state request
+     * @param responseObserver the observer to send the blockchain state back to the
+     *                         client
      */
     @Override
     public void getBlockchainState(GetBlockchainStateRequest request,
             StreamObserver<GetBlockchainStateResponse> responseObserver) {
-        // Log
-        Utils.debug("Received BlockchainState request");
+        try {
+            // Log
+            Utils.debug("Received BlockchainState request");
 
-        // Execute
-        List<Transaction> transactions = nodeState.getBlockchainState();
+            // Delay
+            delayIfRequested();
 
-        // Build Reply
-        GetBlockchainStateResponse.Builder builder = GetBlockchainStateResponse.newBuilder();
-        for (Transaction tx : transactions) {
-            builder.addTransactions(Utils.convertToProto(tx));
+            // Execute
+            List<Transaction> transactions = nodeState.getBlockchainState();
+
+            // Build Reply
+            GetBlockchainStateResponse.Builder builder = GetBlockchainStateResponse.newBuilder();
+            for (Transaction tx : transactions) {
+                builder.addTransactions(Utils.convertToProto(tx));
+            }
+            GetBlockchainStateResponse response = builder.build();
+
+            // Reply
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            responseObserver.onError(Status.INTERNAL.withDescription("Request interrupted").asRuntimeException());
         }
-        GetBlockchainStateResponse response = builder.build();
 
-        // Reply
-        responseObserver.onNext(response);
-        responseObserver.onCompleted();
+    }
+
+    private void delayIfRequested() throws InterruptedException {
+        Integer delay = DelayInterceptor.DELAY_CONTEXT_KEY.get();
+        if (delay != null && delay > 0) {
+            Utils.debug("Delaying request by %d ms as per metadata header", delay);
+            Thread.sleep(delay * 1000L);
+        }
     }
 
     /**
-     * Starts a background daemon thread that continuously fetches transactions from the sequencer
-     * and applies them to the local blockchain state.
+     * Starts a background daemon thread that continuously fetches transactions from
+     * the sequencer and applies them to the local blockchain state.
      */
     private void startFetchingTransactions() {
         Thread fetcher = new Thread(() -> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    int next = nodeState.getNextSequenceNumber();
+                    int next = nodeState.getNextBlockNumber();
 
                     // Request Sequencer
-                    DeliverTransactionResponse response = sequencer.deliverTransaction(next);
+                    DeliverBlockResponse response = sequencer.deliverBlock(next);
+                    List<pt.tecnico.blockchainist.contract.Transaction> block = response.getTransactionList();
 
                     // Execute
-                    if (response.hasTransaction()) {
-                        Transaction domainTx = Utils.convertToDomain(response.getTransaction());
-                        Utils.debug("Received transaction from sequencer: seqNum=%d, type=%s", next, domainTx.type());
-                        nodeState.applyTransaction(domainTx, next);
-                        Utils.debug("Applied transaction seqNum=%d to state", next);
+                    if (!block.isEmpty()) {
+                        Utils.debug("Received Block %d with %d transactions", next, block.size());
+                        List<Transaction> domainBlock = block.stream().map(Utils::convertToDomain).toList();
+                        nodeState.applyBlock(domainBlock);
                     } else {
                         Thread.sleep(100);
                     }

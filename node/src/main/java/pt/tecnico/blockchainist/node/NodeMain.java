@@ -3,6 +3,9 @@ package pt.tecnico.blockchainist.node;
 import io.grpc.BindableService;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.ServerInterceptors;
+import io.grpc.ServerServiceDefinition;
+import pt.tecnico.blockchainist.node.grpc.DelayInterceptor;
 import pt.tecnico.blockchainist.node.grpc.NodeSequencerService;
 import pt.tecnico.blockchainist.common.Utils;
 
@@ -10,8 +13,8 @@ import java.io.IOException;
 
 /**
  * Main entry point for the blockchain node server.
- * This class initializes the node server, establishes connection to the sequencer,
- * and handles the server lifecycle.
+ * This class initializes the node server, establishes connection to the
+ * sequencer, and handles the server lifecycle.
  */
 public class NodeMain {
     /**
@@ -48,8 +51,12 @@ public class NodeMain {
             // Configure the service
             final BindableService impl = new NodeServiceImpl(organization, sequencer);
 
+            // Configure Interceptor Service
+            final ServerServiceDefinition implWithInterceptor = ServerInterceptors.intercept(impl,
+                     new DelayInterceptor());
+
             // Start the server
-            Server server = ServerBuilder.forPort(port).addService(impl).build();
+            Server server = ServerBuilder.forPort(port).addService(implWithInterceptor).build();
             server.start();
             System.out.println("Node Server started");
 

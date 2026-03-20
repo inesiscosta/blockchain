@@ -9,13 +9,16 @@ import java.util.regex.Pattern;
 import com.google.protobuf.Message;
 
 import io.grpc.StatusRuntimeException;
+import io.grpc.stub.StreamObserver;
 import pt.tecnico.blockchainist.client.grpc.ClientNodeService;
+import pt.tecnico.blockchainist.client.grpc.MessageObserver;
 import pt.tecnico.blockchainist.common.Utils;
 import pt.tecnico.blockchainist.contract.ReadBalanceResponse;
 
 /**
  * Processes user commands for interacting with the blockchain.
- * This class implements a command-line interface for executing blockchain operations
+ * This class implements a command-line interface for executing blockchain
+ * operations
  * such as wallet creation, deletion, transfers, and balance queries.
  */
 public class CommandProcessor {
@@ -25,8 +28,7 @@ public class CommandProcessor {
     private static final String CREATE_ASYNC = "c";
     private static final String DELETE_BLOCKING = "E";
     private static final String DELETE_ASYNC = "e";
-    private static final String BALANCE_BLOCKING = "S";
-    private static final String BALANCE_ASYNC = "s";
+    private static final String BALANCE = "S";
     private static final String TRANSFER_BLOCKING = "T";
     private static final String TRANSFER_ASYNC = "t";
     private static final String DEBUG_BLOCKCHAIN_STATE = "B";
@@ -78,12 +80,8 @@ public class CommandProcessor {
                         this.delete(split, false);
                         break;
 
-                    case BALANCE_BLOCKING:
-                        this.balance(split, true);
-                        break;
-
-                    case BALANCE_ASYNC:
-                        this.balance(split, false);
+                    case BALANCE:
+                        this.balance(split);
                         break;
 
                     case TRANSFER_BLOCKING:
@@ -116,12 +114,13 @@ public class CommandProcessor {
             }
         }
         scanner.close();
+        nodes.forEach(ClientNodeService::shutdown);
     }
 
     /**
      * Handles the create wallet command.
      *
-     * @param split the command arguments split by spaces
+     * @param split      the command arguments split by spaces
      * @param isBlocking whether the operation should block until completion
      */
     private void create(String[] split, boolean isBlocking) {
@@ -135,13 +134,17 @@ public class CommandProcessor {
         // Make the call
         ClientNodeService node = nodes.get(nodeIndex);
         Utils.debug("Sending CreateWallet request to node %d: userId=%s, walletId=%s", nodeIndex, userId, walletId);
-        execute(() -> node.createWallet(userId, walletId, nodeDelay));
+        if (isBlocking) {
+            execute(() -> node.createWallet(userId, walletId, nodeDelay));
+        } else {
+            node.createWalletAsync(userId, walletId, nodeDelay, createObserver());
+        }
     }
 
     /**
      * Handles the delete wallet command.
      *
-     * @param split the command arguments split by spaces
+     * @param split      the command arguments split by spaces
      * @param isBlocking whether the operation should block until completion
      */
     private void delete(String[] split, boolean isBlocking) {
@@ -155,16 +158,19 @@ public class CommandProcessor {
         // Make the call
         ClientNodeService node = nodes.get(nodeIndex);
         Utils.debug("Sending DeleteWallet request to node %d: userId=%s, walletId=%s", nodeIndex, userId, walletId);
-        execute(() -> node.deleteWallet(userId, walletId, nodeDelay));
+        if (isBlocking) {
+            execute(() -> node.deleteWallet(userId, walletId, nodeDelay));
+        } else {
+            node.deleteWalletAsync(userId, walletId, nodeDelay, createObserver());
+        }
     }
 
     /**
      * Handles the read balance command.
      *
      * @param split the command arguments split by spaces
-     * @param isBlocking whether the operation should block until completion
      */
-    private void balance(String[] split, boolean isBlocking) {
+    private void balance(String[] split) {
         this.checkBalanceCommandArgs(split);
 
         String walletId = split[1];
@@ -179,7 +185,7 @@ public class CommandProcessor {
     /**
      * Handles the transfer command.
      *
-     * @param split the command arguments split by spaces
+     * @param split      the command arguments split by spaces
      * @param isBlocking whether the operation should block until completion
      */
     private void transfer(String[] split, boolean isBlocking) {
@@ -196,7 +202,11 @@ public class CommandProcessor {
         ClientNodeService node = nodes.get(nodeIndex);
         Utils.debug("Sending Transfer request to node %d: userId=%s, srcWalletId=%s, dstWalletId=%s, amount=%d",
                 nodeIndex, userId, srcWalletId, dstWalletId, amount);
-        execute(() -> node.transfer(userId, srcWalletId, dstWalletId, amount, nodeDelay));
+        if (isBlocking) {
+            execute(() -> node.transfer(userId, srcWalletId, dstWalletId, amount, nodeDelay));
+        } else {
+            node.transferAsync(userId, srcWalletId, dstWalletId, amount, nodeDelay, createObserver());
+        }
     }
 
     /**
@@ -427,9 +437,9 @@ public class CommandProcessor {
         System.err.println("Usage:\n" +
                 "- C|c <user_id> <wallet_id> <node_index> <node_delay>\n" +
                 "- E|e <user_id> <wallet_id> <node_index> <node_delay>\n" +
-                "- S|s <wallet_id> <node_index> <node_delay>\n" +
                 "- T|t <source_user_id> <source_wallet_id> <destination_wallet_id> <amount> <node_index> <node_delay>\n"
                 +
+                "- S <wallet_id> <node_index> <node_delay>\n" +
                 "- B <node_index>\n" +
                 "- P <integer>\n" +
                 "- X\n");
@@ -465,5 +475,17 @@ public class CommandProcessor {
             // Handle error
             System.err.println("[Error] " + commandNumber + ": " + e.getStatus().getDescription());
         }
+    }
+
+    /**
+     * Generates a new command number and creates a generic StreamObserver
+     * to handle the async gRPC response.
+     *
+     * @param <T> the type of the gRPC response message
+     * @return a properly configured MessageObserver
+     */
+    private <T> StreamObserver<T> createObserver() {
+        Long commandNumber = this.commandCounter.incrementAndGet();
+        return new MessageObserver<>(commandNumber);
     }
 }

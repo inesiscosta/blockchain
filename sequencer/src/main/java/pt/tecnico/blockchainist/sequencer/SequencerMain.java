@@ -28,9 +28,11 @@ public class SequencerMain {
 
             // Get the Sequencer args
             final int port = Utils.parsePort(args[0], "sequencer");
+            final int blockTransactions = args.length > 1 ? Utils.parsePositiveInt(args[1], "block transactions") : 4;
+            final int blockTime = args.length > 2 ? Utils.parsePositiveInt(args[2], "block time") : 5;
 
             // Configure the service
-            final BindableService impl = new SequencerServiceImpl();
+            final BindableService impl = new SequencerServiceImpl(blockTransactions, blockTime);
 
             // Start the server
             Server server = ServerBuilder.forPort(port).addService(impl).build();
@@ -61,6 +63,6 @@ public class SequencerMain {
     }
 
     private static void printUsage() {
-        System.err.printf("Usage: mvn exec:java -Dexec.args=\"<port>\"");
+        System.err.printf("Usage: mvn exec:java -Dexec.args=\"<port> [<blockTransactions>] [<blockTime>]\"");
     }
 }

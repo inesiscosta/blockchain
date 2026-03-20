@@ -5,28 +5,35 @@ import pt.tecnico.blockchainist.common.Utils;
 import pt.tecnico.blockchainist.contract.*;
 import pt.tecnico.blockchainist.sequencer.domain.SequencerState;
 import pt.tecnico.blockchainist.common.Transaction;
+
+import java.util.List;
+
 import io.grpc.Status;
 
 /**
  * Implementation of the sequencer gRPC service.
- * This class handles transaction ordering requests from nodes by assigning sequence numbers
+ * This class handles transaction ordering requests from nodes by assigning
+ * sequence numbers
  * and delivering ordered transactions.
  */
 public class SequencerServiceImpl extends SequencerServiceGrpc.SequencerServiceImplBase {
-    private final SequencerState seqState = new SequencerState();
+    private final SequencerState seqState;
 
     /**
      * Constructs a new SequencerServiceImpl.
      */
-    public SequencerServiceImpl() {
+    public SequencerServiceImpl(int blockTransactions, int blockTime) {
+        this.seqState = new SequencerState(blockTransactions, blockTime);
     }
 
     /**
      * Handles broadcast requests from nodes.
      * Assigns a sequence number to the incoming transaction.
      *
-     * @param request the broadcast request containing the transaction to order
-     * @param responseObserver the observer to send the sequence number back to the node
+     * @param request          the broadcast request containing the transaction to
+     *                         order
+     * @param responseObserver the observer to send the sequence number back to the
+     *                         node
      */
     @Override
     public void broadcast(BroadcastRequest request, StreamObserver<BroadcastResponse> responseObserver) {
@@ -53,29 +60,29 @@ public class SequencerServiceImpl extends SequencerServiceGrpc.SequencerServiceI
     }
 
     /**
-     * Handles transaction delivery requests from nodes.
-     * Returns the transaction for the requested sequence number if available.
+     * Handles block delivery requests from nodes.
+     * Returns the transactions for the requested block number if available.
      *
-     * @param request the delivery request containing the sequence number
-     * @param responseObserver the observer to send the transaction back to the node
+     * @param request          the delivery request containing the block number
+     * @param responseObserver the observer to send the transactions back to the
+     *                         node
      */
     @Override
-    public void deliverTransaction(DeliverTransactionRequest request,
-            StreamObserver<DeliverTransactionResponse> responseObserver) {
+    public void deliverBlock(DeliverBlockRequest request,
+            StreamObserver<DeliverBlockResponse> responseObserver) {
         try {
             // Check
-            if (request.getSequenceNumber() <= 0)
-                throw new IllegalArgumentException("Sequence numbers start at 1!");
+            if (request.getBlockNumber() <= 0)
+                throw new IllegalArgumentException("Block numbers start at 1!");
 
             // Execute
-            Transaction tx = seqState.deliverTransaction(request.getSequenceNumber());
+            List<Transaction> block = seqState.deliverBlock(request.getBlockNumber());
 
             // Map
-            DeliverTransactionResponse.Builder builder = DeliverTransactionResponse.newBuilder();
-            if (tx != null) {
-                // Only map and set if it actually exists
-                Utils.debug("Delivering Transaction: seqNum=%d", request.getSequenceNumber());
-                builder.setTransaction(Utils.convertToProto(tx));
+            DeliverBlockResponse.Builder builder = DeliverBlockResponse.newBuilder();
+            Utils.debug("Delivering Block: blockNum=%d, txCount=%d", request.getBlockNumber(), block.size());
+            for (Transaction tx : block) {
+                builder.addTransaction(Utils.convertToProto(tx));
             }
 
             // Respond
@@ -84,6 +91,10 @@ public class SequencerServiceImpl extends SequencerServiceGrpc.SequencerServiceI
         } catch (IllegalArgumentException e) {
             // Error Handling
             responseObserver.onError(Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            responseObserver.onError(
+                    Status.INTERNAL.withDescription("Thread interrupted while waiting for block").asRuntimeException());
         }
 
     }

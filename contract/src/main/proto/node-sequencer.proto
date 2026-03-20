@@ -17,12 +17,12 @@ message BroadcastResponse {
   int32 sequence_number = 1;
 }
 
-message DeliverTransactionRequest {
-  int32 sequence_number = 1;
+message DeliverBlockRequest {
+  int32 block_number = 1;
 }
 
-message DeliverTransactionResponse {
-  Transaction transaction = 1;
+message DeliverBlockResponse {
+  repeated Transaction transaction = 1;
 }
 
 // SequencerService receives transactions, assigns sequence numbers, and lets nodes fetch transactions by sequence number.
@@ -30,7 +30,6 @@ service SequencerService {
   // Broadcast submits one transaction to the sequencer. Returns the assigned sequence number.
   rpc Broadcast(BroadcastRequest) returns (BroadcastResponse);
 
-  // DeliverTransaction retrieves the transaction associated with a given sequence number.
-  rpc DeliverTransaction(DeliverTransactionRequest) returns (DeliverTransactionResponse);
-  // TO DO: na entrega B.1, adicionar operação DeliverBlock, que devolve bloco.
+  // DeliverBlock retrieves the block associated with a given sequence number.
+  rpc DeliverBlock(DeliverBlockRequest) returns (DeliverBlockResponse);
 }

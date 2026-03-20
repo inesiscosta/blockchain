@@ -78,6 +78,8 @@
 					<mainClass>${mainclass}</mainClass>
 					<arguments>
 						<argument>${sequencer.port}</argument>
+						<argument>${sequencer.blocktransactions}</argument>
+						<argument>${sequencer.blocktime}</argument>
 					</arguments>
 				</configuration>
 			</plugin>
