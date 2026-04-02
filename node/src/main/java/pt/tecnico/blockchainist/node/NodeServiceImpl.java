@@ -382,8 +382,13 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
+                } catch (io.grpc.StatusRuntimeException e) {
+                    // signature fail (critical)
+                    System.err.println(
+                            "[Error] [Heartbeat] " + e.getStatus().getCode() + ": " + e.getStatus().getDescription());
+                    break; 
                 } catch (Exception e) {
-                    System.err.println("[Error] [Heartbeat] " + e.getMessage());
+                    System.err.println("[Error] [Heartbeat] Unexpected error: " + e.getMessage());
                     try {
                         // Wait a bit before retrying
                         Thread.sleep(2000);

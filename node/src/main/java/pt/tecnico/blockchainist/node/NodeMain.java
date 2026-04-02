@@ -8,6 +8,7 @@ import io.grpc.ServerServiceDefinition;
 import pt.tecnico.blockchainist.node.grpc.DelayInterceptor;
 import pt.tecnico.blockchainist.node.grpc.NodeSequencerService;
 import pt.tecnico.blockchainist.common.Utils;
+import pt.tecnico.blockchainist.node.grpc.ClientSignatureInterceptor;
 
 import java.io.IOException;
 
@@ -53,7 +54,8 @@ public class NodeMain {
 
             // Configure Interceptor Service
             final ServerServiceDefinition implWithInterceptor = ServerInterceptors.intercept(impl,
-                     new DelayInterceptor());
+                    new ClientSignatureInterceptor(),
+                    new DelayInterceptor());
 
             // Start the server
             Server server = ServerBuilder.forPort(port).addService(implWithInterceptor).build();

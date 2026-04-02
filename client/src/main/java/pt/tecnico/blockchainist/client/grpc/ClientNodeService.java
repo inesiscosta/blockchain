@@ -1,13 +1,17 @@
 package pt.tecnico.blockchainist.client.grpc;
 
+import pt.tecnico.blockchainist.common.Constants;
+import pt.tecnico.blockchainist.common.Utils;
 import pt.tecnico.blockchainist.contract.*;
- 
+
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.stub.StreamObserver;
 import io.grpc.Metadata;
 import io.grpc.stub.MetadataUtils;
 import java.util.concurrent.TimeUnit;
+import com.google.protobuf.MessageLite;
+import java.security.PrivateKey;
 
 /**
  * Service class for client-side gRPC communication with blockchain nodes.
@@ -20,8 +24,6 @@ public class ClientNodeService {
     private final NodeServiceGrpc.NodeServiceBlockingStub blockingStub;
     private final NodeServiceGrpc.NodeServiceStub asyncStub;
     private final int timeout;
-    private static final Metadata.Key<String> HEADER_KEY_DELAY = Metadata.Key.of("delay",
-            Metadata.ASCII_STRING_MARSHALLER);
 
     /**
      * Constructs a new ClientNodeService and establishes a connection to the
@@ -55,7 +57,8 @@ public class ClientNodeService {
     public CreateWalletResponse createWallet(String userId, String walletId, Integer delay, String transactionId) {
         CreateWalletRequest request = CreateWalletRequest.newBuilder().setUserId(userId).setWalletId(walletId)
                 .setTransactionId(transactionId).build();
-        return withDelay(blockingStub, delay).createWallet(request);
+        byte[] signature = generateSignature(userId, request, "CreateWalletRequest");
+        return withMetadata(blockingStub, delay, signature).createWallet(request);
     }
 
     /**
@@ -73,7 +76,8 @@ public class ClientNodeService {
                 .setWalletId(walletId)
                 .setTransactionId(transactionId)
                 .build();
-        return withDelay(blockingStub, delay).deleteWallet(request);
+        byte[] signature = generateSignature(userId, request, "DeleteWalletRequest");
+        return withMetadata(blockingStub, delay, signature).deleteWallet(request);
     }
 
     /**
@@ -86,7 +90,8 @@ public class ClientNodeService {
      * @param delay     optional delay parameter (currently unused)
      * @return TransferResponse containing the result of the transfer operation
      */
-    public TransferResponse transfer(String srcUserId, String srcWallet, String dstWallet, Long amount, Integer delay, String transactionId) {
+    public TransferResponse transfer(String srcUserId, String srcWallet, String dstWallet, Long amount, Integer delay,
+            String transactionId) {
         TransferRequest request = TransferRequest.newBuilder()
                 .setSrcUserId(srcUserId)
                 .setSrcWalletId(srcWallet)
@@ -94,7 +99,8 @@ public class ClientNodeService {
                 .setValue(amount.longValue())
                 .setTransactionId(transactionId)
                 .build();
-        return withDelay(blockingStub, delay).transfer(request);
+        byte[] signature = generateSignature(srcUserId, request, "TransferRequest");
+        return withMetadata(blockingStub, delay, signature).transfer(request);
     }
 
     /**
@@ -106,7 +112,7 @@ public class ClientNodeService {
      */
     public ReadBalanceResponse readBalance(String walletId, Integer delay) {
         ReadBalanceRequest request = ReadBalanceRequest.newBuilder().setWalletId(walletId).build();
-        return withDelay(blockingStub, delay).readBalance(request);
+        return withMetadata(blockingStub, delay, null).readBalance(request);
     }
 
     /**
@@ -117,7 +123,7 @@ public class ClientNodeService {
      */
     public GetBlockchainStateResponse getBlockchainState() {
         GetBlockchainStateRequest request = GetBlockchainStateRequest.newBuilder().build();
-        return withDelay(blockingStub, null).getBlockchainState(request);
+        return withMetadata(blockingStub, null, null).getBlockchainState(request);
     }
 
     /**
@@ -137,7 +143,10 @@ public class ClientNodeService {
                 .setWalletId(walletId)
                 .setTransactionId(transactionId)
                 .build();
-        withDelay(asyncStub, delay).createWallet(request, observer);
+        byte[] signature = generateSignature(userId, request, "CreateWalletRequest", observer);
+        if (signature == null)
+            return;
+        withMetadata(asyncStub, delay, signature).createWallet(request, observer);
     }
 
     /**
@@ -157,7 +166,10 @@ public class ClientNodeService {
                 .setWalletId(walletId)
                 .setTransactionId(transactionId)
                 .build();
-        withDelay(asyncStub, delay).deleteWallet(request, observer);
+        byte[] signature = generateSignature(userId, request, "DeleteWalletRequest", observer);
+        if (signature == null)
+            return;
+        withMetadata(asyncStub, delay, signature).deleteWallet(request, observer);
     }
 
     /**
@@ -171,7 +183,8 @@ public class ClientNodeService {
      * @param observer  the StreamObserver to receive the asynchronous response
      * @return TransferResponse containing the result of the transfer operation
      */
-    public void transferAsync(String srcUserId, String srcWallet, String dstWallet, Long amount, Integer delay, String transactionId,
+    public void transferAsync(String srcUserId, String srcWallet, String dstWallet, Long amount, Integer delay,
+            String transactionId,
             StreamObserver<TransferResponse> observer) {
         TransferRequest request = TransferRequest.newBuilder()
                 .setSrcUserId(srcUserId)
@@ -180,24 +193,39 @@ public class ClientNodeService {
                 .setValue(amount.longValue())
                 .setTransactionId(transactionId)
                 .build();
-        withDelay(asyncStub, delay).transfer(request, observer);
+        byte[] signature = generateSignature(srcUserId, request, "TransferRequest", observer);
+        if (signature == null)
+            return;
+        withMetadata(asyncStub, delay, signature).transfer(request, observer);
     }
 
-    /**
-     * Helper method to attach the delay metadata header to a gRPC stub.
-     *
-     * @param <T>   the specific type of the gRPC stub (e.g., blocking or async
-     *              stub)
-     * @param stub  the base gRPC stub to which the metadata will be attached
-     * @param delay the delay value to send; if null, defaults to "0"
-     * @return a new stub instance of the same type configured with the metadata
-     *         interceptor
-     */
-    private <T extends io.grpc.stub.AbstractStub<T>> T withDelay(T stub, Integer delay) {
+    private <T extends io.grpc.stub.AbstractStub<T>> T withMetadata(T stub, Integer delay, byte[] signature) {
         Metadata metadata = new Metadata();
-        metadata.put(HEADER_KEY_DELAY, delay != null ? delay.toString() : "0");
+        metadata.put(Constants.HEADER_KEY_DELAY, delay != null ? delay.toString() : "0");
+        if (signature != null) {
+            metadata.put(Constants.KEY_SIGNATURE, signature);
+        }
         return stub.withInterceptors(MetadataUtils.newAttachHeadersInterceptor(metadata))
                 .withDeadlineAfter(timeout, TimeUnit.SECONDS);
+    }
+
+    private byte[] generateSignature(String userId, MessageLite request, String operationName) {
+        try {
+            PrivateKey privKey = (PrivateKey) Utils.loadKey(userId + ".priv", true);
+            return Utils.signBytes(request, privKey);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Failed to sign " + operationName + ": " + e.getMessage(), e);
+        }
+    }
+
+    private byte[] generateSignature(String userId, MessageLite request, String operationName,
+            io.grpc.stub.StreamObserver<?> observer) {
+        try {
+            return generateSignature(userId, request, operationName);
+        } catch (IllegalArgumentException e) {
+            observer.onError(e);
+            return null;
+        }
     }
 
     /**

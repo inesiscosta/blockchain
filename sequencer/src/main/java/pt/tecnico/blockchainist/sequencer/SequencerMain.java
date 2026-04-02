@@ -3,13 +3,17 @@ package pt.tecnico.blockchainist.sequencer;
 import io.grpc.BindableService;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.ServerInterceptors;
+import io.grpc.ServerServiceDefinition;
 import pt.tecnico.blockchainist.common.Utils;
+import pt.tecnico.blockchainist.sequencer.grpc.SignatureTrailerInterceptor;
 
 import java.io.IOException;
 
 /**
  * Main entry point for the blockchain sequencer server.
- * The sequencer is responsible for ordering transactions in the blockchain network.
+ * The sequencer is responsible for ordering transactions in the blockchain
+ * network.
  */
 public class SequencerMain {
     /**
@@ -34,8 +38,12 @@ public class SequencerMain {
             // Configure the service
             final BindableService impl = new SequencerServiceImpl(blockTransactions, blockTime);
 
+            // Configure Interceptor Service
+            final ServerServiceDefinition implWithInterceptor = ServerInterceptors.intercept(impl,
+                    new SignatureTrailerInterceptor());
+
             // Start the server
-            Server server = ServerBuilder.forPort(port).addService(impl).build();
+            Server server = ServerBuilder.forPort(port).addService(implWithInterceptor).build();
             server.start();
             System.out.println("Sequencer Server started");
 

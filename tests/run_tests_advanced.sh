@@ -16,6 +16,7 @@ DEBUG_FLAG=0
 NO_SEQUENCER=0
 NO_SIMPLE=0
 SKIP_BUILD=0
+C2_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -31,6 +32,10 @@ while [[ $# -gt 0 ]]; do
     --skip-build|-SkipBuild)
       SKIP_BUILD=1
       ;;
+    --c2-only)
+      C2_ONLY=1
+      NO_SIMPLE=1
+      ;;
     -h|--help)
       cat <<'EOF'
 Usage: ./run_tests_advanced.sh [options]
@@ -40,6 +45,7 @@ Options:
       --no-sequencer   Do not start sequencer
       --no-simple      Skip simple tests under tests/inputs
       --skip-build     Skip "mvn install -DskipTests"
+      --c2-only        Skip all scenarios and B2 tests, executing only C2 tests
   -h, --help           Show this help message
 EOF
       exit 0
@@ -128,7 +134,7 @@ wait_for_port_spinner() {
   printf '%b  Waiting for %s (%s:%s)...%b' "${C_DGRAY}" "${svc_name}" "${host_name}" "${port}" "${C_RESET}"
 
   while true; do
-    if (echo >"/dev/tcp/${host_name}/${port}") >/dev/null 2>&1; then
+    if ( : >"/dev/tcp/${host_name}/${port}" ) >/dev/null 2>&1; then
       now_ts="$(date +%s)"
       elapsed=$((now_ts - start_ts))
       printf ' %bready (%ss)%b\n' "${C_GREEN}" "${elapsed}" "${C_RESET}"
@@ -485,166 +491,76 @@ else
   printf '%b  Build complete%b\n' "${C_GREEN}" "${C_RESET}"
 fi
 
-write_section "Infrastructure"
-if [[ ${NO_SEQUENCER} -eq 0 ]]; then
-  start_mvn_background "sequencer" "${SEQUENCER_PORT}" "${DEBUG_ARGS}"
-  seq_pid="${STARTED_BG_PID}"
-  seq_log="${STARTED_BG_LOG_FILE}"
-  ACTIVE_PROCS+=("${seq_pid}")
-  assert_service_started "sequencer" "${SEQUENCER_HOST}" "${SEQUENCER_PORT}" "${seq_log}"
-fi
-
-for i in "${!NODE_PORTS[@]}"; do
-  node_host="${NODE_HOSTS[i]}"
-  node_port="${NODE_PORTS[i]}"
-  node_org="${NODE_ORGS[i]}"
-
-  node_args="${node_port} ${node_org} ${SEQUENCER_HOST}:${SEQUENCER_PORT}"
-  start_mvn_background "node-${node_port}" "${node_args}" "${DEBUG_ARGS}"
-  node_pid="${STARTED_BG_PID}"
-  node_log="${STARTED_BG_LOG_FILE}"
-  ACTIVE_PROCS+=("${node_pid}")
-  assert_service_started "node-${node_port}" "${node_host}" "${node_port}" "${node_log}"
-done
-
-CLIENT_ARGS_STR=""
-for i in "${!NODE_PORTS[@]}"; do
-  part="${NODE_HOSTS[i]}:${NODE_PORTS[i]}:${NODE_ORGS[i]}"
-  if [[ -z "${CLIENT_ARGS_STR}" ]]; then
-    CLIENT_ARGS_STR="${part}"
-  else
-    CLIENT_ARGS_STR+=" ${part}"
+# Synchronous client runner — returns path to stdout file.
+run_client_sync() {
+  local input="$1" nodes="$2" label="${3:-b2}"
+  local out="${TEST_OUTPUTS}/${label}-client-out-${RUN_SUFFIX}-$$-${RANDOM}.txt"
+  local err="${TEST_OUTPUTS}/${label}-client-err-${RUN_SUFFIX}-$$-${RANDOM}.txt"
+  local arg_list=(--quiet -f "${MVN_ROOT_POM}" -pl client exec:java "-Dexec.args=${nodes}")
+  if [[ -n "${DEBUG_ARGS//[[:space:]]/}" ]]; then
+    arg_list+=("${DEBUG_ARGS}")
   fi
-done
+  "${MVN_EXE}" "${arg_list[@]}" <"${input}" >"${out}" 2>"${err}"
+  echo "${out}"
+}
 
-##########################################
-# 1. RUN SIMPLE TESTS
-##########################################
-if [[ ${NO_SIMPLE} -eq 1 ]]; then
-  write_section "Simple tests skipped"
-  printf '%b  Skipping simple tests due to --no-simple flag.%b\n' "${C_DGRAY}" "${C_RESET}"
-elif [[ -d "${INPUTS}" ]]; then
-  simple_files=("${INPUTS}"/*.txt)
-  if (( ${#simple_files[@]} > 0 )); then
-    write_section "Running ${#simple_files[@]} Simple Test(s)"
-
-    for sf in "${simple_files[@]}"; do
-      t0="$(date +%s)"
-      sf_name="$(basename "${sf}")"
-      sf_base="${sf_name%.txt}"
-      out_file="${TEST_OUTPUTS}/out-${sf_name}"
-      err_file="${TEST_OUTPUTS}/err-${sf_name}"
-
-      expected_name="${sf_name/input/out}"
-      exp_file="${EXPECTED_OUTPUTS}/${expected_name}"
-
-      start_client_async "${sf}" "${CLIENT_ARGS_STR}" "${out_file}" "${err_file}" "${DEBUG_ARGS}"
-      client_pid="${STARTED_CLIENT_PID}"
-      if wait "${client_pid}"; then
-        exit_code=0
-      else
-        exit_code=$?
-      fi
-
-      if [[ ! -s "${err_file}" ]]; then
-        rm -f "${err_file}"
-      fi
-
-      elapsed=$(( $(date +%s) - t0 ))
-      time_str="${elapsed}s"
-      prefix="  [Simple] ${sf_base}"
-
-      if (( exit_code != 0 )); then
-        printf '%-35s  %bFAILED%b\n' "${prefix}" "${C_RED}" "${C_RESET}"
-        add_result "Simple/${sf_base}" "FAILED" "${time_str}" "exit ${exit_code}"
-        continue
-      fi
-
-      if [[ -f "${exp_file}" ]]; then
-        norm_out="$(mktemp)"
-        norm_exp="$(mktemp)"
-        normalize_file_to "${out_file}" "${norm_out}"
-        normalize_file_to "${exp_file}" "${norm_exp}"
-
-        if cmp -s "${norm_out}" "${norm_exp}"; then
-          printf '%-35s  %bPASSED%b\n' "${prefix}" "${C_GREEN}" "${C_RESET}"
-          add_result "Simple/${sf_base}" "PASSED" "${time_str}" ""
-        else
-          printf '%-35s  %bFAILED%b\n' "${prefix}" "${C_RED}" "${C_RESET}"
-          show_diff "${out_file}" "${exp_file}"
-          add_result "Simple/${sf_base}" "FAILED" "${time_str}" "output mismatch"
-        fi
-
-        rm -f "${norm_out}" "${norm_exp}"
-      else
-        printf '%-35s  %bNO EXPECTED FILE%b\n' "${prefix}" "${C_YELLOW}" "${C_RESET}"
-        printf '%b      (Checked: %s)%b\n' "${C_DGRAY}" "${exp_file}" "${C_RESET}"
-      fi
-    done
+if [[ ${C2_ONLY} -eq 0 ]]; then
+  write_section "Infrastructure"
+  if [[ ${NO_SEQUENCER} -eq 0 ]]; then
+    start_mvn_background "sequencer" "${SEQUENCER_PORT}" "${DEBUG_ARGS}"
+    seq_pid="${STARTED_BG_PID}"
+    seq_log="${STARTED_BG_LOG_FILE}"
+    ACTIVE_PROCS+=("${seq_pid}")
+    assert_service_started "sequencer" "${SEQUENCER_HOST}" "${SEQUENCER_PORT}" "${seq_log}"
   fi
-fi
 
-##########################################
-# 2. RUN SCENARIO TESTS
-##########################################
-if [[ -d "${SCENARIOS_INPUTS}" ]]; then
-  scenarios=("${SCENARIOS_INPUTS}"/*)
-  if (( ${#scenarios[@]} > 0 )); then
-    write_section "Running ${#scenarios[@]} Scenario(s)"
+  for i in "${!NODE_PORTS[@]}"; do
+    node_host="${NODE_HOSTS[i]}"
+    node_port="${NODE_PORTS[i]}"
+    node_org="${NODE_ORGS[i]}"
 
-    for scenario in "${scenarios[@]}"; do
-      [[ -d "${scenario}" ]] || continue
+    node_args="${node_port} ${node_org} ${SEQUENCER_HOST}:${SEQUENCER_PORT}"
+    start_mvn_background "node-${node_port}" "${node_args}" "${DEBUG_ARGS}"
+    node_pid="${STARTED_BG_PID}"
+    node_log="${STARTED_BG_LOG_FILE}"
+    ACTIVE_PROCS+=("${node_pid}")
+    assert_service_started "node-${node_port}" "${node_host}" "${node_port}" "${node_log}"
+  done
 
-      scenario_name="$(basename "${scenario}")"
-      printf '%b  Scenario: %s%b\n' "${C_CYAN}" "${scenario_name}" "${C_RESET}"
+  CLIENT_ARGS_STR=""
+  for i in "${!NODE_PORTS[@]}"; do
+    part="${NODE_HOSTS[i]}:${NODE_PORTS[i]}:${NODE_ORGS[i]}"
+    if [[ -z "${CLIENT_ARGS_STR}" ]]; then
+      CLIENT_ARGS_STR="${part}"
+    else
+      CLIENT_ARGS_STR+=" ${part}"
+    fi
+  done
 
-      scenario_expected_dir="${SCENARIOS_EXPECTED}/${scenario_name}"
-      scenario_alts_dir="${TEST_OUTPUTS}/.alts-${scenario_name}-${RUN_SUFFIX}"
-      scenario_alt_count="$(get_scenario_alternatives "${scenario_expected_dir}" "${scenario_alts_dir}")"
-      if (( scenario_alt_count > 0 )); then
-        printf '%b    -> Using %s expected alternative(s)%b\n' "${C_DGRAY}" "${scenario_alt_count}" "${C_RESET}"
-      fi
+  ##########################################
+  # 1. RUN SIMPLE TESTS
+  ##########################################
+  if [[ ${NO_SIMPLE} -eq 1 ]]; then
+    write_section "Simple tests skipped"
+    printf '%b  Skipping simple tests due to --no-simple flag.%b\n' "${C_DGRAY}" "${C_RESET}"
+  elif [[ -d "${INPUTS}" ]]; then
+    simple_files=("${INPUTS}"/*.txt)
+    if (( ${#simple_files[@]} > 0 )); then
+      write_section "Running ${#simple_files[@]} Simple Test(s)"
 
-      client_files=("${scenario}"/*.txt)
-      running_pids=()
-      running_names=()
-      running_out=()
-      running_err=()
-      running_exp=()
-      completed_ok_names=()
-      completed_ok_labels=()
-      completed_ok_prefix=()
-      completed_ok_times=()
-      completed_ok_out=()
-      completed_ok_norm=()
+      for sf in "${simple_files[@]}"; do
+        t0="$(date +%s)"
+        sf_name="$(basename "${sf}")"
+        sf_base="${sf_name%.txt}"
+        out_file="${TEST_OUTPUTS}/out-${sf_name}"
+        err_file="${TEST_OUTPUTS}/err-${sf_name}"
 
-      t0="$(date +%s)"
-      for cf in "${client_files[@]}"; do
-        cf_name="$(basename "${cf}")"
-        printf '%b    -> Starting client: %s%b\n' "${C_DGRAY}" "${cf_name}" "${C_RESET}"
+        expected_name="${sf_name/input/out}"
+        exp_file="${EXPECTED_OUTPUTS}/${expected_name}"
 
-        out_file="${TEST_OUTPUTS}/${scenario_name}-${cf_name}"
-        err_file="${TEST_OUTPUTS}/${scenario_name}-${cf_name}.err"
-        exp_file="${scenario_expected_dir}/${cf_name}"
-
-        start_client_async "${cf}" "${CLIENT_ARGS_STR}" "${out_file}" "${err_file}" "${DEBUG_ARGS}"
-        pid="${STARTED_CLIENT_PID}"
-
-        running_pids+=("${pid}")
-        running_names+=("${cf_name}")
-        running_out+=("${out_file}")
-        running_err+=("${err_file}")
-        running_exp+=("${exp_file}")
-      done
-
-      for i in "${!running_pids[@]}"; do
-        pid="${running_pids[i]}"
-        name="${running_names[i]}"
-        out_file="${running_out[i]}"
-        err_file="${running_err[i]}"
-        exp_file="${running_exp[i]}"
-
-        if wait "${pid}"; then
+        start_client_async "${sf}" "${CLIENT_ARGS_STR}" "${out_file}" "${err_file}" "${DEBUG_ARGS}"
+        client_pid="${STARTED_CLIENT_PID}"
+        if wait "${client_pid}"; then
           exit_code=0
         else
           exit_code=$?
@@ -656,150 +572,241 @@ if [[ -d "${SCENARIOS_INPUTS}" ]]; then
 
         elapsed=$(( $(date +%s) - t0 ))
         time_str="${elapsed}s"
-        test_label="Scenario/${scenario_name}/${name}"
-        prefix="    [Client] ${name}"
+        prefix="  [Simple] ${sf_base}"
 
         if (( exit_code != 0 )); then
           printf '%-35s  %bFAILED%b\n' "${prefix}" "${C_RED}" "${C_RESET}"
-          add_result "${test_label}" "FAILED" "${time_str}" "exit ${exit_code}"
+          add_result "Simple/${sf_base}" "FAILED" "${time_str}" "exit ${exit_code}"
           continue
         fi
-
-        norm_file="${TEST_OUTPUTS}/.norm-${scenario_name}-${name}-${RUN_SUFFIX}"
-        normalize_file_to "${out_file}" "${norm_file}"
-
-        completed_ok_names+=("${name}")
-        completed_ok_labels+=("${test_label}")
-        completed_ok_prefix+=("${prefix}")
-        completed_ok_times+=("${time_str}")
-        completed_ok_out+=("${out_file}")
-        completed_ok_norm+=("${norm_file}")
-      done
-
-      if (( scenario_alt_count > 0 )); then
-        if (( ${#completed_ok_names[@]} != ${#running_names[@]} )); then
-          for i in "${!completed_ok_names[@]}"; do
-            printf '%-35s  %bFAILED%b\n' "${completed_ok_prefix[i]}" "${C_RED}" "${C_RESET}"
-            add_result "${completed_ok_labels[i]}" "FAILED" "${completed_ok_times[i]}" "scenario incomplete (client failed)"
-          done
-          continue
-        fi
-
-        actual_by_client_dir="${TEST_OUTPUTS}/.actual-${scenario_name}-${RUN_SUFFIX}"
-        mkdir -p "${actual_by_client_dir}"
-
-        for i in "${!completed_ok_names[@]}"; do
-          cp "${completed_ok_norm[i]}" "${actual_by_client_dir}/${completed_ok_names[i]}"
-        done
-
-        matched_index="$(find_matching_alternative_index "${scenario_alt_count}" "${scenario_alts_dir}" "${actual_by_client_dir}")"
-        if (( matched_index >= 0 )); then
-          for i in "${!completed_ok_names[@]}"; do
-            printf '%-35s  %bPASSED%b\n' "${completed_ok_prefix[i]}" "${C_GREEN}" "${C_RESET}"
-            add_result "${completed_ok_labels[i]}" "PASSED" "${completed_ok_times[i]}" "alternative #$((matched_index + 1))"
-          done
-        else
-          for i in "${!completed_ok_names[@]}"; do
-            printf '%-35s  %bFAILED%b\n' "${completed_ok_prefix[i]}" "${C_RED}" "${C_RESET}"
-            add_result "${completed_ok_labels[i]}" "FAILED" "${completed_ok_times[i]}" "no alternative matched"
-          done
-        fi
-
-        continue
-      fi
-
-      for i in "${!completed_ok_names[@]}"; do
-        name="${completed_ok_names[i]}"
-        label="${completed_ok_labels[i]}"
-        prefix="${completed_ok_prefix[i]}"
-        time_str="${completed_ok_times[i]}"
-        out_file="${completed_ok_out[i]}"
-        norm_file="${completed_ok_norm[i]}"
-        exp_file="${scenario_expected_dir}/${name}"
 
         if [[ -f "${exp_file}" ]]; then
-          exp_norm="$(mktemp)"
-          normalize_file_to "${exp_file}" "${exp_norm}"
+          norm_out="$(mktemp)"
+          norm_exp="$(mktemp)"
+          normalize_file_to "${out_file}" "${norm_out}"
+          normalize_file_to "${exp_file}" "${norm_exp}"
 
-          if cmp -s "${norm_file}" "${exp_norm}"; then
+          if cmp -s "${norm_out}" "${norm_exp}"; then
             printf '%-35s  %bPASSED%b\n' "${prefix}" "${C_GREEN}" "${C_RESET}"
-            add_result "${label}" "PASSED" "${time_str}" ""
+            add_result "Simple/${sf_base}" "PASSED" "${time_str}" ""
           else
             printf '%-35s  %bFAILED%b\n' "${prefix}" "${C_RED}" "${C_RESET}"
             show_diff "${out_file}" "${exp_file}"
-            add_result "${label}" "FAILED" "${time_str}" "output mismatch"
+            add_result "Simple/${sf_base}" "FAILED" "${time_str}" "output mismatch"
           fi
 
-          rm -f "${exp_norm}"
+          rm -f "${norm_out}" "${norm_exp}"
         else
           printf '%-35s  %bNO EXPECTED FILE%b\n' "${prefix}" "${C_YELLOW}" "${C_RESET}"
+          printf '%b      (Checked: %s)%b\n' "${C_DGRAY}" "${exp_file}" "${C_RESET}"
         fi
       done
-    done
+    fi
   fi
-fi
 
-##########################################
-# 3. RUN B2 INFRASTRUCTURE TESTS
-##########################################
-# Stop shared infrastructure, then run B2-specific tests that need
-# to control node lifecycle (late-join, failover, dedup).
-printf '\n%b  Stopping shared infrastructure for B2 tests...%b\n' "${C_DGRAY}" "${C_RESET}"
-for pid in "${ACTIVE_PROCS[@]:-}"; do
-  kill_process_tree "${pid}"
-done
-ACTIVE_PROCS=()
-sleep 1
+  ##########################################
+  # 2. RUN SCENARIO TESTS
+  ##########################################
+  if [[ -d "${SCENARIOS_INPUTS}" ]]; then
+    scenarios=("${SCENARIOS_INPUTS}"/*)
+    if (( ${#scenarios[@]} > 0 )); then
+      write_section "Running ${#scenarios[@]} Scenario(s)"
 
-B2_SEQUENCER_PORT=3001
-B2_NODE_PORT_1=2011
-B2_NODE_PORT_2=2012
-B2_NODE_PORT_3=2013
-B2_FO_NODE_PORT_1=2021
-B2_FO_NODE_PORT_2=2022
+      for scenario in "${scenarios[@]}"; do
+        [[ -d "${scenario}" ]] || continue
 
-# Synchronous client runner — returns path to stdout file.
-run_client_sync() {
-  local input="$1" nodes="$2"
-  local out="${TEST_OUTPUTS}/b2-client-out-${RUN_SUFFIX}-$$.txt"
-  local err="${TEST_OUTPUTS}/b2-client-err-${RUN_SUFFIX}-$$.txt"
-  local arg_list=(--quiet -f "${MVN_ROOT_POM}" -pl client exec:java "-Dexec.args=${nodes}")
-  if [[ -n "${DEBUG_ARGS//[[:space:]]/}" ]]; then
-    arg_list+=("${DEBUG_ARGS}")
+        scenario_name="$(basename "${scenario}")"
+        printf '%b  Scenario: %s%b\n' "${C_CYAN}" "${scenario_name}" "${C_RESET}"
+
+        scenario_expected_dir="${SCENARIOS_EXPECTED}/${scenario_name}"
+        scenario_alts_dir="${TEST_OUTPUTS}/.alts-${scenario_name}-${RUN_SUFFIX}"
+        scenario_alt_count="$(get_scenario_alternatives "${scenario_expected_dir}" "${scenario_alts_dir}")"
+        if (( scenario_alt_count > 0 )); then
+          printf '%b    -> Using %s expected alternative(s)%b\n' "${C_DGRAY}" "${scenario_alt_count}" "${C_RESET}"
+        fi
+
+        client_files=("${scenario}"/*.txt)
+        running_pids=()
+        running_names=()
+        running_out=()
+        running_err=()
+        running_exp=()
+        completed_ok_names=()
+        completed_ok_labels=()
+        completed_ok_prefix=()
+        completed_ok_times=()
+        completed_ok_out=()
+        completed_ok_norm=()
+
+        t0="$(date +%s)"
+        for cf in "${client_files[@]}"; do
+          cf_name="$(basename "${cf}")"
+          printf '%b    -> Starting client: %s%b\n' "${C_DGRAY}" "${cf_name}" "${C_RESET}"
+
+          out_file="${TEST_OUTPUTS}/${scenario_name}-${cf_name}"
+          err_file="${TEST_OUTPUTS}/${scenario_name}-${cf_name}.err"
+          exp_file="${scenario_expected_dir}/${cf_name}"
+
+          start_client_async "${cf}" "${CLIENT_ARGS_STR}" "${out_file}" "${err_file}" "${DEBUG_ARGS}"
+          pid="${STARTED_CLIENT_PID}"
+
+          running_pids+=("${pid}")
+          running_names+=("${cf_name}")
+          running_out+=("${out_file}")
+          running_err+=("${err_file}")
+          running_exp+=("${exp_file}")
+        done
+
+        for i in "${!running_pids[@]}"; do
+          pid="${running_pids[i]}"
+          name="${running_names[i]}"
+          out_file="${running_out[i]}"
+          err_file="${running_err[i]}"
+          exp_file="${running_exp[i]}"
+
+          if wait "${pid}"; then
+            exit_code=0
+          else
+            exit_code=$?
+          fi
+
+          if [[ ! -s "${err_file}" ]]; then
+            rm -f "${err_file}"
+          fi
+
+          elapsed=$(( $(date +%s) - t0 ))
+          time_str="${elapsed}s"
+          test_label="Scenario/${scenario_name}/${name}"
+          prefix="    [Client] ${name}"
+
+          if (( exit_code != 0 )); then
+            printf '%-35s  %bFAILED%b\n' "${prefix}" "${C_RED}" "${C_RESET}"
+            add_result "${test_label}" "FAILED" "${time_str}" "exit ${exit_code}"
+            continue
+          fi
+
+          norm_file="${TEST_OUTPUTS}/.norm-${scenario_name}-${name}-${RUN_SUFFIX}"
+          normalize_file_to "${out_file}" "${norm_file}"
+
+          completed_ok_names+=("${name}")
+          completed_ok_labels+=("${test_label}")
+          completed_ok_prefix+=("${prefix}")
+          completed_ok_times+=("${time_str}")
+          completed_ok_out+=("${out_file}")
+          completed_ok_norm+=("${norm_file}")
+        done
+
+        if (( scenario_alt_count > 0 )); then
+          if (( ${#completed_ok_names[@]} != ${#running_names[@]} )); then
+            for i in "${!completed_ok_names[@]}"; do
+              printf '%-35s  %bFAILED%b\n' "${completed_ok_prefix[i]}" "${C_RED}" "${C_RESET}"
+              add_result "${completed_ok_labels[i]}" "FAILED" "${completed_ok_times[i]}" "scenario incomplete (client failed)"
+            done
+            continue
+          fi
+
+          actual_by_client_dir="${TEST_OUTPUTS}/.actual-${scenario_name}-${RUN_SUFFIX}"
+          mkdir -p "${actual_by_client_dir}"
+
+          for i in "${!completed_ok_names[@]}"; do
+            cp "${completed_ok_norm[i]}" "${actual_by_client_dir}/${completed_ok_names[i]}"
+          done
+
+          matched_index="$(find_matching_alternative_index "${scenario_alt_count}" "${scenario_alts_dir}" "${actual_by_client_dir}")"
+          if (( matched_index >= 0 )); then
+            for i in "${!completed_ok_names[@]}"; do
+              printf '%-35s  %bPASSED%b\n' "${completed_ok_prefix[i]}" "${C_GREEN}" "${C_RESET}"
+              add_result "${completed_ok_labels[i]}" "PASSED" "${completed_ok_times[i]}" "alternative #$((matched_index + 1))"
+            done
+          else
+            for i in "${!completed_ok_names[@]}"; do
+              printf '%-35s  %bFAILED%b\n' "${completed_ok_prefix[i]}" "${C_RED}" "${C_RESET}"
+              add_result "${completed_ok_labels[i]}" "FAILED" "${completed_ok_times[i]}" "no alternative matched"
+            done
+          fi
+
+          continue
+        fi
+
+        for i in "${!completed_ok_names[@]}"; do
+          name="${completed_ok_names[i]}"
+          label="${completed_ok_labels[i]}"
+          prefix="${completed_ok_prefix[i]}"
+          time_str="${completed_ok_times[i]}"
+          out_file="${completed_ok_out[i]}"
+          norm_file="${completed_ok_norm[i]}"
+          exp_file="${scenario_expected_dir}/${name}"
+
+          if [[ -f "${exp_file}" ]]; then
+            exp_norm="$(mktemp)"
+            normalize_file_to "${exp_file}" "${exp_norm}"
+
+            if cmp -s "${norm_file}" "${exp_norm}"; then
+              printf '%-35s  %bPASSED%b\n' "${prefix}" "${C_GREEN}" "${C_RESET}"
+              add_result "${label}" "PASSED" "${time_str}" ""
+            else
+              printf '%-35s  %bFAILED%b\n' "${prefix}" "${C_RED}" "${C_RESET}"
+              show_diff "${out_file}" "${exp_file}"
+              add_result "${label}" "FAILED" "${time_str}" "output mismatch"
+            fi
+
+            rm -f "${exp_norm}"
+          else
+            printf '%-35s  %bNO EXPECTED FILE%b\n' "${prefix}" "${C_YELLOW}" "${C_RESET}"
+          fi
+        done
+      done
+    fi
   fi
-  "${MVN_EXE}" "${arg_list[@]}" <"${input}" >"${out}" 2>"${err}"
-  echo "${out}"
-}
 
-extract_b2_balances() {
-  grep "^balance:" "$1" || true
-}
+  ##########################################
+  # 3. RUN B2 INFRASTRUCTURE TESTS
+  ##########################################
+  # Stop shared infrastructure, then run B2-specific tests that need
+  # to control node lifecycle (late-join, failover, dedup).
+  printf '\n%b  Stopping shared infrastructure for B2 tests...%b\n' "${C_DGRAY}" "${C_RESET}"
+  for pid in "${ACTIVE_PROCS[@]:-}"; do
+    kill_process_tree "${pid}"
+  done
+  ACTIVE_PROCS=()
+  sleep 1
 
-write_section "B2 Infrastructure Tests"
+  B2_SEQUENCER_PORT=3001
+  B2_NODE_PORT_1=2011
+  B2_NODE_PORT_2=2012
+  B2_NODE_PORT_3=2013
+  B2_FO_NODE_PORT_1=2021
+  B2_FO_NODE_PORT_2=2022
 
-#-----------------------------------------
-# B2-1: Late-join node sync
-#-----------------------------------------
-# Two nodes run transactions; a brand-new node 3 joins and must sync
-# the full blockchain before serving queries. Results must match node 1.
-t0_b2="$(date +%s)"
+  extract_b2_balances() {
+    grep "^balance:" "$1" || true
+  }
 
-start_mvn_background "sequencer-b2" "${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
-b2_seq_pid="${STARTED_BG_PID}"
-ACTIVE_PROCS+=("${b2_seq_pid}")
-assert_service_started "sequencer-b2" "localhost" "${B2_SEQUENCER_PORT}" "${STARTED_BG_LOG_FILE}"
+  write_section "B2 Infrastructure Tests"
 
-start_mvn_background "node-b2-${B2_NODE_PORT_1}" "${B2_NODE_PORT_1} Org1 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
-b2_node1_pid="${STARTED_BG_PID}"
-ACTIVE_PROCS+=("${b2_node1_pid}")
-assert_service_started "node-b2-${B2_NODE_PORT_1}" "localhost" "${B2_NODE_PORT_1}" "${STARTED_BG_LOG_FILE}"
+  #-----------------------------------------
+  # B2-1: Late-join node sync
+  #-----------------------------------------
+  # Two nodes run transactions; a brand-new node 3 joins and must sync
+  # the full blockchain before serving queries. Results must match node 1.
+  t0_b2="$(date +%s)"
 
-start_mvn_background "node-b2-${B2_NODE_PORT_2}" "${B2_NODE_PORT_2} Org2 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
-ACTIVE_PROCS+=("${STARTED_BG_PID}")
-assert_service_started "node-b2-${B2_NODE_PORT_2}" "localhost" "${B2_NODE_PORT_2}" "${STARTED_BG_LOG_FILE}"
+  start_mvn_background "sequencer-b2" "${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  b2_seq_pid="${STARTED_BG_PID}"
+  ACTIVE_PROCS+=("${b2_seq_pid}")
+  assert_service_started "sequencer-b2" "localhost" "${B2_SEQUENCER_PORT}" "${STARTED_BG_LOG_FILE}"
 
-B2_SEED_INPUT="$(mktemp)"
-cat >"${B2_SEED_INPUT}" <<'EOF'
+  start_mvn_background "node-b2-${B2_NODE_PORT_1}" "${B2_NODE_PORT_1} Org1 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  b2_node1_pid="${STARTED_BG_PID}"
+  ACTIVE_PROCS+=("${b2_node1_pid}")
+  assert_service_started "node-b2-${B2_NODE_PORT_1}" "localhost" "${B2_NODE_PORT_1}" "${STARTED_BG_LOG_FILE}"
+
+  start_mvn_background "node-b2-${B2_NODE_PORT_2}" "${B2_NODE_PORT_2} Org2 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  ACTIVE_PROCS+=("${STARTED_BG_PID}")
+  assert_service_started "node-b2-${B2_NODE_PORT_2}" "localhost" "${B2_NODE_PORT_2}" "${STARTED_BG_LOG_FILE}"
+
+  B2_SEED_INPUT="$(mktemp)"
+  cat >"${B2_SEED_INPUT}" <<'EOF'
 C Alice cA 0 0
 C Bob cB 0 0
 T BC bc cA 200 0 0
@@ -807,123 +814,123 @@ T BC bc cB 150 1 0
 T Alice cA cB 50 0 0
 X
 EOF
-run_client_sync "${B2_SEED_INPUT}" "localhost:${B2_NODE_PORT_1}:Org1 localhost:${B2_NODE_PORT_2}:Org2" >/dev/null
-rm -f "${B2_SEED_INPUT}"
+  run_client_sync "${B2_SEED_INPUT}" "localhost:${B2_NODE_PORT_1}:Org1 localhost:${B2_NODE_PORT_2}:Org2" >/dev/null
+  rm -f "${B2_SEED_INPUT}"
 
-printf '%b    Starting late-join node on port %s...%b\n' "${C_DGRAY}" "${B2_NODE_PORT_3}" "${C_RESET}"
-start_mvn_background "node-b2-${B2_NODE_PORT_3}" "${B2_NODE_PORT_3} Org3 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
-ACTIVE_PROCS+=("${STARTED_BG_PID}")
-assert_service_started "node-b2-${B2_NODE_PORT_3}" "localhost" "${B2_NODE_PORT_3}" "${STARTED_BG_LOG_FILE}"
+  printf '%b    Starting late-join node on port %s...%b\n' "${C_DGRAY}" "${B2_NODE_PORT_3}" "${C_RESET}"
+  start_mvn_background "node-b2-${B2_NODE_PORT_3}" "${B2_NODE_PORT_3} Org3 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  ACTIVE_PROCS+=("${STARTED_BG_PID}")
+  assert_service_started "node-b2-${B2_NODE_PORT_3}" "localhost" "${B2_NODE_PORT_3}" "${STARTED_BG_LOG_FILE}"
 
-B2_CHECK_INPUT="$(mktemp)"
-cat >"${B2_CHECK_INPUT}" <<'EOF'
+  B2_CHECK_INPUT="$(mktemp)"
+  cat >"${B2_CHECK_INPUT}" <<'EOF'
 S cA 0 0
 S cB 0 0
 S bc 0 0
 X
 EOF
-B2_OUT_N1="$(run_client_sync "${B2_CHECK_INPUT}" "localhost:${B2_NODE_PORT_1}:Org1")"
-B2_OUT_N3="$(run_client_sync "${B2_CHECK_INPUT}" "localhost:${B2_NODE_PORT_3}:Org3")"
-rm -f "${B2_CHECK_INPUT}"
+  B2_OUT_N1="$(run_client_sync "${B2_CHECK_INPUT}" "localhost:${B2_NODE_PORT_1}:Org1")"
+  B2_OUT_N3="$(run_client_sync "${B2_CHECK_INPUT}" "localhost:${B2_NODE_PORT_3}:Org3")"
+  rm -f "${B2_CHECK_INPUT}"
 
-B2_BAL_N1="$(extract_b2_balances "${B2_OUT_N1}")"
-B2_BAL_N3="$(extract_b2_balances "${B2_OUT_N3}")"
-elapsed_b21=$(( $(date +%s) - t0_b2 ))
+  B2_BAL_N1="$(extract_b2_balances "${B2_OUT_N1}")"
+  B2_BAL_N3="$(extract_b2_balances "${B2_OUT_N3}")"
+  elapsed_b21=$(( $(date +%s) - t0_b2 ))
 
-if [[ "${B2_BAL_N1}" == "${B2_BAL_N3}" ]] && [[ -n "${B2_BAL_N1}" ]]; then
-  add_result "B2/late-join-sync" "PASSED" "${elapsed_b21}s" "balances match node 1"
-else
-  add_result "B2/late-join-sync" "FAILED" "${elapsed_b21}s" "node1=[${B2_BAL_N1}] node3=[${B2_BAL_N3}]"
-fi
+  if [[ "${B2_BAL_N1}" == "${B2_BAL_N3}" ]] && [[ -n "${B2_BAL_N1}" ]]; then
+    add_result "B2/late-join-sync" "PASSED" "${elapsed_b21}s" "balances match node 1"
+  else
+    add_result "B2/late-join-sync" "FAILED" "${elapsed_b21}s" "node1=[${B2_BAL_N1}] node3=[${B2_BAL_N3}]"
+  fi
 
-B2_EXPECTED_SYNC="balance: 150
+  B2_EXPECTED_SYNC="balance: 150
 balance: 200
 balance: 650"
-if [[ "${B2_BAL_N3}" == "${B2_EXPECTED_SYNC}" ]]; then
-  add_result "B2/late-join-balances" "PASSED" "${elapsed_b21}s" "cA=150 cB=200 bc=650"
-else
-  add_result "B2/late-join-balances" "FAILED" "${elapsed_b21}s" "expected [$(echo "${B2_EXPECTED_SYNC}" | tr '\n' '|')] got [$(echo "${B2_BAL_N3}" | tr '\n' '|')]"
-fi
+  if [[ "${B2_BAL_N3}" == "${B2_EXPECTED_SYNC}" ]]; then
+    add_result "B2/late-join-balances" "PASSED" "${elapsed_b21}s" "cA=150 cB=200 bc=650"
+  else
+    add_result "B2/late-join-balances" "FAILED" "${elapsed_b21}s" "expected [$(echo "${B2_EXPECTED_SYNC}" | tr '\n' '|')] got [$(echo "${B2_BAL_N3}" | tr '\n' '|')]"
+  fi
 
-#-----------------------------------------
-# B2-2: Client failover (dead node → retry)
-#-----------------------------------------
-# Node 1 is killed. Client configured with [node1, node2] must succeed
-# by automatically retrying on node 2.
-for pid in "${ACTIVE_PROCS[@]:-}"; do
-  kill_process_tree "${pid}"
-done
-ACTIVE_PROCS=()
-sleep 1
+  #-----------------------------------------
+  # B2-2: Client failover (dead node → retry)
+  #-----------------------------------------
+  # Node 1 is killed. Client configured with [node1, node2] must succeed
+  # by automatically retrying on node 2.
+  for pid in "${ACTIVE_PROCS[@]:-}"; do
+    kill_process_tree "${pid}"
+  done
+  ACTIVE_PROCS=()
+  sleep 1
 
-start_mvn_background "sequencer-b2" "${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
-b2_seq_pid="${STARTED_BG_PID}"
-ACTIVE_PROCS+=("${b2_seq_pid}")
-assert_service_started "sequencer-b2" "localhost" "${B2_SEQUENCER_PORT}" "${STARTED_BG_LOG_FILE}"
+  start_mvn_background "sequencer-b2" "${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  b2_seq_pid="${STARTED_BG_PID}"
+  ACTIVE_PROCS+=("${b2_seq_pid}")
+  assert_service_started "sequencer-b2" "localhost" "${B2_SEQUENCER_PORT}" "${STARTED_BG_LOG_FILE}"
 
-start_mvn_background "node-b2-${B2_FO_NODE_PORT_1}" "${B2_FO_NODE_PORT_1} Org1 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
-b2_fo1_pid="${STARTED_BG_PID}"
-ACTIVE_PROCS+=("${b2_fo1_pid}")
-assert_service_started "node-b2-${B2_FO_NODE_PORT_1}" "localhost" "${B2_FO_NODE_PORT_1}" "${STARTED_BG_LOG_FILE}"
+  start_mvn_background "node-b2-${B2_FO_NODE_PORT_1}" "${B2_FO_NODE_PORT_1} Org1 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  b2_fo1_pid="${STARTED_BG_PID}"
+  ACTIVE_PROCS+=("${b2_fo1_pid}")
+  assert_service_started "node-b2-${B2_FO_NODE_PORT_1}" "localhost" "${B2_FO_NODE_PORT_1}" "${STARTED_BG_LOG_FILE}"
 
-start_mvn_background "node-b2-${B2_FO_NODE_PORT_2}" "${B2_FO_NODE_PORT_2} Org2 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
-b2_fo2_pid="${STARTED_BG_PID}"
-ACTIVE_PROCS+=("${b2_fo2_pid}")
-assert_service_started "node-b2-${B2_FO_NODE_PORT_2}" "localhost" "${B2_FO_NODE_PORT_2}" "${STARTED_BG_LOG_FILE}"
+  start_mvn_background "node-b2-${B2_FO_NODE_PORT_2}" "${B2_FO_NODE_PORT_2} Org2 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  b2_fo2_pid="${STARTED_BG_PID}"
+  ACTIVE_PROCS+=("${b2_fo2_pid}")
+  assert_service_started "node-b2-${B2_FO_NODE_PORT_2}" "localhost" "${B2_FO_NODE_PORT_2}" "${STARTED_BG_LOG_FILE}"
 
-B2_FO_NODES="localhost:${B2_FO_NODE_PORT_1}:Org1 localhost:${B2_FO_NODE_PORT_2}:Org2"
+  B2_FO_NODES="localhost:${B2_FO_NODE_PORT_1}:Org1 localhost:${B2_FO_NODE_PORT_2}:Org2"
 
-B2_INIT_INPUT="$(mktemp)"
-cat >"${B2_INIT_INPUT}" <<'EOF'
+  B2_INIT_INPUT="$(mktemp)"
+  cat >"${B2_INIT_INPUT}" <<'EOF'
 C Alice cA 0 0
 T BC bc cA 500 0 0
 X
 EOF
-run_client_sync "${B2_INIT_INPUT}" "${B2_FO_NODES}" >/dev/null
-rm -f "${B2_INIT_INPUT}"
+  run_client_sync "${B2_INIT_INPUT}" "${B2_FO_NODES}" >/dev/null
+  rm -f "${B2_INIT_INPUT}"
 
-printf '%b    Killing fo-node1 (port %s)...%b\n' "${C_DGRAY}" "${B2_FO_NODE_PORT_1}" "${C_RESET}"
-kill_process_tree "${b2_fo1_pid}"
-# Remove from active procs so cleanup doesn't re-kill it
-ACTIVE_PROCS=("${b2_seq_pid}" "${b2_fo2_pid}")
-sleep 1
+  printf '%b    Killing fo-node1 (port %s)...%b\n' "${C_DGRAY}" "${B2_FO_NODE_PORT_1}" "${C_RESET}"
+  kill_process_tree "${b2_fo1_pid}"
+  # Remove from active procs so cleanup doesn't re-kill it
+  ACTIVE_PROCS=("${b2_seq_pid}" "${b2_fo2_pid}")
+  sleep 1
 
-t0_fo="$(date +%s)"
-B2_FAILOVER_INPUT="$(mktemp)"
-cat >"${B2_FAILOVER_INPUT}" <<'EOF'
+  t0_fo="$(date +%s)"
+  B2_FAILOVER_INPUT="$(mktemp)"
+  cat >"${B2_FAILOVER_INPUT}" <<'EOF'
 T Alice cA bc 100 0 0
 S cA 0 0
 S bc 0 0
 X
 EOF
-B2_FO_OUT="$(run_client_sync "${B2_FAILOVER_INPUT}" "${B2_FO_NODES}")"
-rm -f "${B2_FAILOVER_INPUT}"
-elapsed_fo=$(( $(date +%s) - t0_fo ))
+  B2_FO_OUT="$(run_client_sync "${B2_FAILOVER_INPUT}" "${B2_FO_NODES}")"
+  rm -f "${B2_FAILOVER_INPUT}"
+  elapsed_fo=$(( $(date +%s) - t0_fo ))
 
-B2_FO_BALANCES="$(extract_b2_balances "${B2_FO_OUT}")"
-B2_EXPECTED_FO="balance: 400
+  B2_FO_BALANCES="$(extract_b2_balances "${B2_FO_OUT}")"
+  B2_EXPECTED_FO="balance: 400
 balance: 600"
 
-if echo "${B2_FO_BALANCES}" | grep -q "balance: 400"; then
-  add_result "B2/failover-transfer" "PASSED" "${elapsed_fo}s" "transfer succeeded despite dead node"
-else
-  add_result "B2/failover-transfer" "FAILED" "${elapsed_fo}s" "output: $(cat "${B2_FO_OUT}")"
-fi
+  if echo "${B2_FO_BALANCES}" | grep -q "balance: 400"; then
+    add_result "B2/failover-transfer" "PASSED" "${elapsed_fo}s" "transfer succeeded despite dead node"
+  else
+    add_result "B2/failover-transfer" "FAILED" "${elapsed_fo}s" "output: $(cat "${B2_FO_OUT}")"
+  fi
 
-if [[ "${B2_FO_BALANCES}" == "${B2_EXPECTED_FO}" ]]; then
-  add_result "B2/failover-balances" "PASSED" "${elapsed_fo}s" "cA=400 bc=600"
-else
-  add_result "B2/failover-balances" "FAILED" "${elapsed_fo}s" "expected [$(echo "${B2_EXPECTED_FO}" | tr '\n' '|')] got [$(echo "${B2_FO_BALANCES}" | tr '\n' '|')]"
-fi
+  if [[ "${B2_FO_BALANCES}" == "${B2_EXPECTED_FO}" ]]; then
+    add_result "B2/failover-balances" "PASSED" "${elapsed_fo}s" "cA=400 bc=600"
+  else
+    add_result "B2/failover-balances" "FAILED" "${elapsed_fo}s" "expected [$(echo "${B2_EXPECTED_FO}" | tr '\n' '|')] got [$(echo "${B2_FO_BALANCES}" | tr '\n' '|')]"
+  fi
 
-#-----------------------------------------
-# B2-3: Deduplication / cross-node consistency
-#-----------------------------------------
-# Normal operations through the surviving node must produce correct final
-# state — no phantom duplicate entries from the sequencer's request-ID dedup.
-t0_dedup="$(date +%s)"
-B2_DEDUP_INPUT="$(mktemp)"
-cat >"${B2_DEDUP_INPUT}" <<'EOF'
+  #-----------------------------------------
+  # B2-3: Deduplication / cross-node consistency
+  #-----------------------------------------
+  # Normal operations through the surviving node must produce correct final
+  # state — no phantom duplicate entries from the sequencer's request-ID dedup.
+  t0_dedup="$(date +%s)"
+  B2_DEDUP_INPUT="$(mktemp)"
+  cat >"${B2_DEDUP_INPUT}" <<'EOF'
 C Carol cC 1 0
 T BC bc cC 300 0 0
 T Carol cC bc 300 1 0
@@ -932,21 +939,140 @@ S bc 0 0
 S bc 1 0
 X
 EOF
-B2_DEDUP_OUT="$(run_client_sync "${B2_DEDUP_INPUT}" "${B2_FO_NODES}")"
-rm -f "${B2_DEDUP_INPUT}"
-elapsed_dedup=$(( $(date +%s) - t0_dedup ))
+  B2_DEDUP_OUT="$(run_client_sync "${B2_DEDUP_INPUT}" "${B2_FO_NODES}")"
+  rm -f "${B2_DEDUP_INPUT}"
+  elapsed_dedup=$(( $(date +%s) - t0_dedup ))
 
-B2_DEDUP_BAL="$(extract_b2_balances "${B2_DEDUP_OUT}")"
-B2_EXPECTED_DEDUP="balance: 600
+  B2_DEDUP_BAL="$(extract_b2_balances "${B2_DEDUP_OUT}")"
+  B2_EXPECTED_DEDUP="balance: 600
 balance: 600"
 
-if [[ "${B2_DEDUP_BAL}" == "${B2_EXPECTED_DEDUP}" ]]; then
-  add_result "B2/dedup-consistency" "PASSED" "${elapsed_dedup}s" "state consistent after create/transfer/delete cycle"
-else
-  add_result "B2/dedup-consistency" "FAILED" "${elapsed_dedup}s" "expected [$(echo "${B2_EXPECTED_DEDUP}" | tr '\n' '|')] got [$(echo "${B2_DEDUP_BAL}" | tr '\n' '|')]"
+  if [[ "${B2_DEDUP_BAL}" == "${B2_EXPECTED_DEDUP}" ]]; then
+    add_result "B2/dedup-consistency" "PASSED" "${elapsed_dedup}s" "state consistent after create/transfer/delete cycle"
+  else
+    add_result "B2/dedup-consistency" "FAILED" "${elapsed_dedup}s" "expected [$(echo "${B2_EXPECTED_DEDUP}" | tr '\n' '|')] got [$(echo "${B2_DEDUP_BAL}" | tr '\n' '|')]"
+  fi
 fi
 
 ######################################
+
+#-----------------------------------------
+# C2: Digital Signature Validation
+#-----------------------------------------
+write_section "C2 Infrastructure Tests"
+
+t0_c2="$(date +%s)"
+for pid in "${ACTIVE_PROCS[@]:-}"; do
+  kill_process_tree "${pid}"
+done
+ACTIVE_PROCS=()
+sleep 1
+
+# Temporarily overwrite Alice's public key with Bob's to simulate a signature mismatch
+C2_ALICE_PUB_SRC="${MVN_ROOT_DIR}/node/src/main/resources/Alice.pub"
+C2_BOB_PUB_SRC="${MVN_ROOT_DIR}/node/src/main/resources/Bob.pub"
+cp "${C2_ALICE_PUB_SRC}" "${C2_ALICE_PUB_SRC}.bak"
+cp "${C2_BOB_PUB_SRC}" "${C2_ALICE_PUB_SRC}"
+if [ -f "${MVN_ROOT_DIR}/node/target/classes/Alice.pub" ]; then
+    cp "${MVN_ROOT_DIR}/node/target/classes/Alice.pub" "${MVN_ROOT_DIR}/node/target/classes/Alice.pub.bak"
+    cp "${MVN_ROOT_DIR}/node/target/classes/Bob.pub" "${MVN_ROOT_DIR}/node/target/classes/Alice.pub"
+fi
+
+C2_SEQUENCER_PORT=3001
+C2_NODE_PORT=2011
+
+start_mvn_background "sequencer-c2" "${C2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+c2_seq_pid="${STARTED_BG_PID}"
+ACTIVE_PROCS+=("${c2_seq_pid}")
+assert_service_started "sequencer-c2" "localhost" "${C2_SEQUENCER_PORT}" "${STARTED_BG_LOG_FILE}"
+
+start_mvn_background "node-c2-${C2_NODE_PORT}" "${C2_NODE_PORT} Org1 localhost:${C2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+c2_node1_pid="${STARTED_BG_PID}"
+c2_node1_dbg="${STARTED_BG_DBG_FILE}"
+ACTIVE_PROCS+=("${c2_node1_pid}")
+assert_service_started "node-c2-${C2_NODE_PORT}" "localhost" "${C2_NODE_PORT}" "${STARTED_BG_LOG_FILE}"
+
+C2_INIT_INPUT="$(mktemp)"
+cat >"${C2_INIT_INPUT}" <<'EOF'
+C Alice cA 0 0
+X
+EOF
+
+C2_OUT="$(run_client_sync "${C2_INIT_INPUT}" "localhost:${C2_NODE_PORT}:Org1" "c2")"
+C2_ERR="${C2_OUT/c2-client-out/c2-client-err}"
+rm -f "${C2_INIT_INPUT}"
+elapsed_c2=$(( $(date +%s) - t0_c2 ))
+
+if grep -qi "\[Security\] Invalid signature" "${c2_node1_dbg}"; then
+  add_result "C2/client-signature-validation" "PASSED" "${elapsed_c2}s" "invalid client signature correctly rejected"
+else
+  add_result "C2/client-signature-validation" "FAILED" "${elapsed_c2}s" "invalid client signature was not rejected"
+fi
+
+# Restore public key
+mv "${C2_ALICE_PUB_SRC}.bak" "${C2_ALICE_PUB_SRC}"
+if [ -f "${MVN_ROOT_DIR}/node/target/classes/Alice.pub.bak" ]; then
+    mv "${MVN_ROOT_DIR}/node/target/classes/Alice.pub.bak" "${MVN_ROOT_DIR}/node/target/classes/Alice.pub"
+fi
+
+#-----------------------------------------
+# C2: Sequencer-to-Node Signature Validation
+#-----------------------------------------
+t0_c2_seq="$(date +%s)"
+for pid in "${ACTIVE_PROCS[@]:-}"; do
+  kill_process_tree "${pid}"
+done
+ACTIVE_PROCS=()
+sleep 1
+
+# Temporarily overwrite Sequencer's public key with Alice's to simulate a signature mismatch
+C2_SEQ_PUB_SRC="${MVN_ROOT_DIR}/node/src/main/resources/seq/Seq.pub"
+C2_ALICE_PUB_SRC="${MVN_ROOT_DIR}/node/src/main/resources/Alice.pub"
+cp "${C2_SEQ_PUB_SRC}" "${C2_SEQ_PUB_SRC}.bak"
+cp "${C2_ALICE_PUB_SRC}" "${C2_SEQ_PUB_SRC}"
+if [ -f "${MVN_ROOT_DIR}/node/target/classes/seq/Seq.pub" ]; then
+    cp "${MVN_ROOT_DIR}/node/target/classes/seq/Seq.pub" "${MVN_ROOT_DIR}/node/target/classes/seq/Seq.pub.bak"
+    cp "${MVN_ROOT_DIR}/node/target/classes/Alice.pub" "${MVN_ROOT_DIR}/node/target/classes/seq/Seq.pub"
+fi
+
+C2_SEQ_PORT=3002
+C2_SEQ_NODE_PORT=2014
+
+start_mvn_background "sequencer-c2-seq" "${C2_SEQ_PORT}" "${DEBUG_ARGS}"
+c2_seq_pid_seq="${STARTED_BG_PID}"
+ACTIVE_PROCS+=("${c2_seq_pid_seq}")
+assert_service_started "sequencer-c2-seq" "localhost" "${C2_SEQ_PORT}" "${STARTED_BG_LOG_FILE}"
+
+start_mvn_background "node-c2-seq-${C2_SEQ_NODE_PORT}" "${C2_SEQ_NODE_PORT} Org1 localhost:${C2_SEQ_PORT}" "${DEBUG_ARGS}"
+c2_node1_pid_seq="${STARTED_BG_PID}"
+c2_node_dbg_file="${STARTED_BG_DBG_FILE}"
+ACTIVE_PROCS+=("${c2_node1_pid_seq}")
+assert_service_started "node-c2-seq-${C2_SEQ_NODE_PORT}" "localhost" "${C2_SEQ_NODE_PORT}" "${STARTED_BG_LOG_FILE}"
+
+C2_SEQ_INPUT="$(mktemp)"
+cat >"${C2_SEQ_INPUT}" <<'EOF'
+c Alice cA 0 0
+c Alice cB 0 0
+c Alice cc 0 0
+c Alice cD 0 0
+X
+EOF
+
+C2_SEQ_OUT="$(run_client_sync "${C2_SEQ_INPUT}" "localhost:${C2_SEQ_NODE_PORT}:Org1" "c2")"
+rm -f "${C2_SEQ_INPUT}"
+elapsed_c2_seq=$(( $(date +%s) - t0_c2_seq ))
+
+if grep -qi "\[Security\] Invalid signature" "${c2_node_dbg_file}"; then
+  add_result "C2/seq-signature-validation" "PASSED" "${elapsed_c2_seq}s" "invalid sequencer signature correctly rejected"
+else
+  add_result "C2/seq-signature-validation" "FAILED" "${elapsed_c2_seq}s" "invalid sequencer signature was not rejected"
+fi
+
+# Restore Sequencer public key
+mv "${C2_SEQ_PUB_SRC}.bak" "${C2_SEQ_PUB_SRC}"
+if [ -f "${MVN_ROOT_DIR}/node/target/classes/seq/Seq.pub.bak" ]; then
+    mv "${MVN_ROOT_DIR}/node/target/classes/seq/Seq.pub.bak" "${MVN_ROOT_DIR}/node/target/classes/seq/Seq.pub"
+fi
 
 ##########################################
 # Summary generation

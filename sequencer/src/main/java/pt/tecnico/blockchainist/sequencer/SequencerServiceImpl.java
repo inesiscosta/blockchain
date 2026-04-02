@@ -6,6 +6,8 @@ import pt.tecnico.blockchainist.contract.*;
 import pt.tecnico.blockchainist.sequencer.domain.SequencerState;
 import pt.tecnico.blockchainist.common.Transaction;
 
+import java.security.PrivateKey;
+import java.security.SignatureException;
 import java.util.List;
 
 import io.grpc.Status;
@@ -18,12 +20,19 @@ import io.grpc.Status;
  */
 public class SequencerServiceImpl extends SequencerServiceGrpc.SequencerServiceImplBase {
     private final SequencerState seqState;
+    private PrivateKey privateKey;
 
     /**
      * Constructs a new SequencerServiceImpl.
      */
     public SequencerServiceImpl(int blockTransactions, int blockTime) {
         this.seqState = new SequencerState(blockTransactions, blockTime);
+        try {
+            this.privateKey = (PrivateKey) Utils.loadKey("Seq.priv", true);
+        } catch (Exception e) {
+            System.err.println("[ERROR]: Private Key failed loading - " + e.getMessage());
+            throw new RuntimeException("Private Key failed loading");
+        }
     }
 
     /**
@@ -85,8 +94,12 @@ public class SequencerServiceImpl extends SequencerServiceGrpc.SequencerServiceI
                 builder.addTransaction(Utils.convertToProto(tx));
             }
 
+            // Sign
+            DeliverBlockResponse response = builder.build();
+            Utils.sign(response, privateKey);
+
             // Respond
-            responseObserver.onNext(builder.build());
+            responseObserver.onNext(response);
             responseObserver.onCompleted();
         } catch (IllegalArgumentException e) {
             // Error Handling
@@ -95,6 +108,8 @@ public class SequencerServiceImpl extends SequencerServiceGrpc.SequencerServiceI
             Thread.currentThread().interrupt();
             responseObserver.onError(
                     Status.INTERNAL.withDescription("Thread interrupted while waiting for block").asRuntimeException());
+        } catch (SignatureException e) {
+            responseObserver.onError(Status.INTERNAL.withDescription("Failed to sign block").asRuntimeException());
         }
     }
 
@@ -103,17 +118,19 @@ public class SequencerServiceImpl extends SequencerServiceGrpc.SequencerServiceI
      * Returns the number of the last completed block.
      *
      * @param request          the request for the last block number
-     * @param responseObserver the observer to send the block number back to the node
+     * @param responseObserver the observer to send the block number back to the
+     *                         node
      */
     @Override
-    public void lastBlockNumber(LastBlockNumberRequest request, StreamObserver<LastBlockNumberResponse> responseObserver) {
+    public void lastBlockNumber(LastBlockNumberRequest request,
+            StreamObserver<LastBlockNumberResponse> responseObserver) {
         try {
             int lastBlockNum = seqState.getLastBlockNumber();
             responseObserver.onNext(LastBlockNumberResponse.newBuilder().setBlockNumber(lastBlockNum).build());
             responseObserver.onCompleted();
         } catch (Exception e) {
-            responseObserver.onError(Status.INTERNAL.withDescription("Error retrieving last block number").asRuntimeException());
+            responseObserver.onError(
+                    Status.INTERNAL.withDescription("Error retrieving last block number").asRuntimeException());
         }
     }
-
 }

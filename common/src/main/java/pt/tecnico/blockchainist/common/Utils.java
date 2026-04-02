@@ -1,8 +1,25 @@
 package pt.tecnico.blockchainist.common;
 
+import java.security.Signature;
+import java.security.SignatureException;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
+
+import com.google.protobuf.MessageLite;
+
 import pt.tecnico.blockchainist.contract.CreateWalletRequest;
 import pt.tecnico.blockchainist.contract.DeleteWalletRequest;
+import pt.tecnico.blockchainist.contract.DeliverBlockResponse;
 import pt.tecnico.blockchainist.contract.TransferRequest;
+import io.grpc.Status;
+
+import java.io.InputStream;
+import java.security.Key;
+import java.security.KeyFactory;
+import java.security.PrivateKey;
+import java.security.PublicKey;
 
 /**
  * Utility class providing common helper methods for the blockchain system.
@@ -12,6 +29,7 @@ import pt.tecnico.blockchainist.contract.TransferRequest;
 public class Utils {
 
     private static final boolean DEBUG = System.getProperty("debug") != null;
+    private static final ConcurrentHashMap<String, Key> keyCache = new ConcurrentHashMap<>();
 
     /**
      * Prints a debug message to stderr if debug mode is enabled.
@@ -131,5 +149,79 @@ public class Utils {
                     proto.getTransactionId());
             default -> throw new IllegalArgumentException("Unknown transaction type");
         };
+    }
+
+    public static Status verifySignature(MessageLite payload, byte[] signatureBytes, PublicKey key) {
+        if (signatureBytes == null) {
+            return Status.UNAUTHENTICATED.withDescription("Missing mandatory signature trailer!");
+        }
+
+        try {
+            Signature sig = Signature.getInstance("SHA256withRSA");
+            sig.initVerify(key);
+            sig.update(payload.toByteArray());
+
+            if (!sig.verify(signatureBytes)) {
+                System.err.println("[Security] Invalid signature");
+                return Status.UNAUTHENTICATED.withDescription("Signature verification failed!");
+            }
+
+            debug("%s", "[Security] Signature verified successfully.");
+            return Status.OK;
+        } catch (Exception e) {
+            return Status.INTERNAL.withDescription("Error verifying signature: " + e.getMessage());
+        }
+    }
+
+    public static void sign(DeliverBlockResponse response, PrivateKey privateKey) throws SignatureException {
+        try {
+            // Apply metadata
+            AtomicReference<byte[]> sigRef = Constants.SIGNATURE_REF_KEY.get();
+            if (sigRef != null) {
+                sigRef.set(signBytes(response, privateKey));
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            throw new SignatureException(e.getMessage());
+        }
+    }
+
+    public static byte[] signBytes(MessageLite payload, PrivateKey privateKey) throws Exception {
+        Signature sig = Signature.getInstance("SHA256withRSA");
+        sig.initSign(privateKey);
+        sig.update(payload.toByteArray());
+        return sig.sign();
+    }
+
+    public static byte[] readResource(String path) throws Exception {
+        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        try (InputStream is = classLoader.getResourceAsStream(path)) {
+            if (is == null) {
+                throw new IllegalArgumentException("File not Found: " + path);
+            }
+            return is.readAllBytes();
+        }
+    }
+
+    public static Key loadKey(String resourcePath, boolean isPrivate) throws Exception {
+        if (keyCache.containsKey(resourcePath)) {
+            return keyCache.get(resourcePath);
+        }
+
+        byte[] keyBytes = readResource(resourcePath);
+        KeyFactory kf = KeyFactory.getInstance("RSA");
+        if (isPrivate) {
+            // Private keys strictly use PKCS8
+            PKCS8EncodedKeySpec privateSpec = new PKCS8EncodedKeySpec(keyBytes);
+            Key key = kf.generatePrivate(privateSpec);
+            keyCache.put(resourcePath, key);
+            return key;
+        } else {
+            // Public keys strictly use X509
+            X509EncodedKeySpec publicSpec = new X509EncodedKeySpec(keyBytes);
+            Key key = kf.generatePublic(publicSpec);
+            keyCache.put(resourcePath, key);
+            return key;
+        }
     }
 }

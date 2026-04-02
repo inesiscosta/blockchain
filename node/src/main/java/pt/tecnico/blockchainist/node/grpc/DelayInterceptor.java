@@ -6,6 +6,7 @@ import io.grpc.Metadata;
 import io.grpc.ServerCall;
 import io.grpc.ServerCallHandler;
 import io.grpc.ServerInterceptor;
+import pt.tecnico.blockchainist.common.Constants;
 
 /****
  * gRPC interceptor that reads a "delay" value from the request metadata and
@@ -13,8 +14,6 @@ import io.grpc.ServerInterceptor;
  * access the delay value for simulating processing delays in request handling.
  */
 public class DelayInterceptor implements ServerInterceptor {
-    public static final Metadata.Key<String> HEADER_KEY_DELAY = Metadata.Key.of("delay",
-            Metadata.ASCII_STRING_MARSHALLER);
     public static final Context.Key<Integer> DELAY_CONTEXT_KEY = Context.key("delay");
 
     /**
@@ -31,7 +30,7 @@ public class DelayInterceptor implements ServerInterceptor {
             ServerCall<ReqT, RespT> call, Metadata headers, ServerCallHandler<ReqT, RespT> next) {
 
         // Read the delay from metadata
-        String delayStr = headers.get(HEADER_KEY_DELAY);
+        String delayStr = headers.get(Constants.HEADER_KEY_DELAY);
         int delay = 0;
 
         if (delayStr != null) {

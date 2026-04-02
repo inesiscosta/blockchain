@@ -22,7 +22,11 @@ public class NodeSequencerService {
      */
     public NodeSequencerService(String host, int port) {
         // Open the connection
-        this.channel = ManagedChannelBuilder.forAddress(host, port).usePlaintext().build();
+        this.channel = ManagedChannelBuilder
+                .forAddress(host, port)
+                .usePlaintext()
+                .intercept(new SignatureInterceptor())
+                .build();
 
         // Create the blocking stub
         this.blockingStub = SequencerServiceGrpc.newBlockingStub(channel);

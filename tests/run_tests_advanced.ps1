@@ -8,8 +8,13 @@ param(
     [switch]$d,
     [switch]$NoSequencer,
     [switch]$NoSimple,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$C2Only
 )
+
+if ($C2Only) {
+    $NoSimple = $true
+}
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -412,6 +417,38 @@ try {
     # ==========================================
     # 2. RUN SCENARIO TESTS
     # ==========================================
+    function Invoke-ClientSync([string]$inputContent, [string]$nodes, [string]$label = "b2") {
+        $outFile = Join-Path $TEST_OUTPUTS "${label}-client-out-${RUN_SUFFIX}-$PID-$(Get-Random).txt"
+        $errFile = Join-Path $TEST_OUTPUTS "${label}-client-err-${RUN_SUFFIX}-$PID-$(Get-Random).txt"
+        
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = $MVN_EXE
+        $allArgs = "--quiet -f `"$MVN_ROOT_POM`" -pl client exec:java -Dexec.args=`"$nodes`""
+        if ($debugArgs) { $allArgs += " $debugArgs" }
+        $psi.Arguments = $allArgs
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardInput = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $proc.StandardInput.Write($inputContent)
+        $proc.StandardInput.Close()
+        
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+        $proc.WaitForExit()
+
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
+
+        [System.IO.File]::WriteAllText($outFile, $stdout)
+        [System.IO.File]::WriteAllText($errFile, $stderr)
+        return $outFile
+    }
+
+    if (-not $C2Only) {
+
     if (Test-Path $SCENARIOS_INPUTS) {
         $scenarios = @(Get-ChildItem -Path $SCENARIOS_INPUTS -Directory)
         
@@ -554,36 +591,6 @@ try {
     $B2_NODE_PORT_3 = 2013
     $B2_FO_NODE_PORT_1 = 2021
     $B2_FO_NODE_PORT_2 = 2022
-
-    function Invoke-ClientSync([string]$inputContent, [string]$nodes) {
-        $outFile = Join-Path $TEST_OUTPUTS "b2-client-out-${RUN_SUFFIX}-$PID-$(Get-Random).txt"
-        $errFile = Join-Path $TEST_OUTPUTS "b2-client-err-${RUN_SUFFIX}-$PID-$(Get-Random).txt"
-        
-        $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName = $MVN_EXE
-        $allArgs = "--quiet -f `"$MVN_ROOT_POM`" -pl client exec:java -Dexec.args=`"$nodes`""
-        if ($debugArgs) { $allArgs += " $debugArgs" }
-        $psi.Arguments = $allArgs
-        $psi.UseShellExecute = $false
-        $psi.RedirectStandardInput = $true
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-
-        $proc = [System.Diagnostics.Process]::Start($psi)
-        $proc.StandardInput.Write($inputContent)
-        $proc.StandardInput.Close()
-        
-        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-        $stderrTask = $proc.StandardError.ReadToEndAsync()
-        $proc.WaitForExit()
-
-        $stdout = $stdoutTask.Result
-        $stderr = $stderrTask.Result
-
-        [System.IO.File]::WriteAllText($outFile, $stdout)
-        [System.IO.File]::WriteAllText($errFile, $stderr)
-        return $outFile
-    }
 
     function Extract-B2Balances([string]$outFile) {
         $content = Get-Content $outFile -ErrorAction SilentlyContinue
@@ -751,7 +758,128 @@ X
         $results += [PSCustomObject]@{ Label="B2/dedup-consistency"; Status="FAILED"; Time=$elapsedDedup; Reason="expected [$($b2ExpectedDedup -replace "`n", "|")] got [$($b2DedupBalNorm -replace "`n", "|")]" }
     }
 
+    }
+
+    # ==========================================
+    # C2: Digital Signature Validation
+    # ==========================================
+    Write-Section "C2 Infrastructure Tests"
+
+    $t0_c2 = Get-Date
+
+    foreach ($p in $activeProcs) { Stop-ProcessTree $p }
+    $activeProcs = @()
+    Start-Sleep -Seconds 1
+
+    # Temporarily overwrite Alice's public key with Bob's to simulate a signature mismatch
+    $c2AlicePubSrc = Join-Path $MVN_ROOT_DIR "node/src/main/resources/Alice.pub"
+    $c2BobPubSrc = Join-Path $MVN_ROOT_DIR "node/src/main/resources/Bob.pub"
+    Copy-Item $c2AlicePubSrc "$c2AlicePubSrc.bak" -Force
+    Copy-Item $c2BobPubSrc $c2AlicePubSrc -Force
+
+    $c2AlicePubTarget = Join-Path $MVN_ROOT_DIR "node/target/classes/Alice.pub"
+    $c2BobPubTarget = Join-Path $MVN_ROOT_DIR "node/target/classes/Bob.pub"
+    if (Test-Path $c2AlicePubTarget) {
+        Copy-Item $c2AlicePubTarget "$c2AlicePubTarget.bak" -Force
+        Copy-Item $c2BobPubTarget $c2AlicePubTarget -Force
+    }
+
+    $c2SeqInfo = Start-MvnBackground "sequencer-c2" "3001" $debugArgs
+    $c2_seq_pid = $c2SeqInfo.Process
+    $activeProcs += $c2_seq_pid
+    Assert-ServiceStarted "sequencer-c2" "localhost" 3001 $c2SeqInfo
+
+    $c2Node1Info = Start-MvnBackground "node-c2-2011" "2011 Org1 localhost:3001" $debugArgs
+    $c2_node1_pid = $c2Node1Info.Process
+    $c2_node1_dbg_file = $c2Node1Info.DbgFile
+    $activeProcs += $c2_node1_pid
+    Assert-ServiceStarted "node-c2-2011" "localhost" 2011 $c2Node1Info
+
+    $c2InitInput = @"
+C Alice cA 0 0
+X
+"@
+    $c2Out = Invoke-ClientSync $c2InitInput "localhost:2011:Org1" "c2"
+    $elapsedC2 = "$([Math]::Round(((Get-Date) - $t0_c2).TotalSeconds, 2))s"
+
+    $c2Node1DbgContent = Get-Content $c2_node1_dbg_file -Raw -ErrorAction SilentlyContinue
+    if ($c2Node1DbgContent -match "(?i)\[Security\] Invalid signature") {
+        $results += [PSCustomObject]@{ Label="C2/client-signature-validation"; Status="PASSED"; Time=$elapsedC2; Reason="invalid client signature correctly rejected" }
+    } else {
+        $results += [PSCustomObject]@{ Label="C2/client-signature-validation"; Status="FAILED"; Time=$elapsedC2; Reason="invalid client signature was not rejected" }
+    }
+
+    # Restore public key
+    Move-Item "$c2AlicePubSrc.bak" $c2AlicePubSrc -Force
+    if (Test-Path "$c2AlicePubTarget.bak") {
+        Move-Item "$c2AlicePubTarget.bak" $c2AlicePubTarget -Force
+    }
+
+    #-----------------------------------------
+    # C2: Sequencer-to-Node Signature Validation
+    #-----------------------------------------
+    $t0_c2_seq = Get-Date
+
+    foreach ($p in $activeProcs) { Stop-ProcessTree $p }
+    $activeProcs = @()
+    Start-Sleep -Seconds 1
+
+    # Temporarily overwrite Sequencer's public key with Alice's to simulate a signature mismatch
+    $c2SeqPubSrc = Join-Path $MVN_ROOT_DIR "node/src/main/resources/seq/Seq.pub"
+    $c2AlicePubSrc = Join-Path $MVN_ROOT_DIR "node/src/main/resources/Alice.pub"
+    Copy-Item $c2SeqPubSrc "$c2SeqPubSrc.bak" -Force
+    Copy-Item $c2AlicePubSrc $c2SeqPubSrc -Force
+
+    $c2SeqPubTarget = Join-Path $MVN_ROOT_DIR "node/target/classes/seq/Seq.pub"
+    $c2AlicePubTarget = Join-Path $MVN_ROOT_DIR "node/target/classes/Alice.pub"
+    if (Test-Path $c2SeqPubTarget) {
+        Copy-Item $c2SeqPubTarget "$c2SeqPubTarget.bak" -Force
+        Copy-Item $c2AlicePubTarget $c2SeqPubTarget -Force
+    }
+
+    $c2SeqPort = 3002
+    $c2SeqNodePort = 2014
+
+    $c2SeqSeqInfo = Start-MvnBackground "sequencer-c2-seq" "$c2SeqPort" $debugArgs
+    $c2_seq_pid_seq = $c2SeqSeqInfo.Process
+    $activeProcs += $c2_seq_pid_seq
+    Assert-ServiceStarted "sequencer-c2-seq" "localhost" $c2SeqPort $c2SeqSeqInfo
+
+    $c2Node1SeqInfo = Start-MvnBackground "node-c2-seq-$c2SeqNodePort" "$c2SeqNodePort Org1 localhost:$c2SeqPort" $debugArgs
+    $c2_node1_pid_seq = $c2Node1SeqInfo.Process
+    $c2_node1_dbg_seq = $c2Node1SeqInfo.DbgFile
+    $activeProcs += $c2_node1_pid_seq
+    Assert-ServiceStarted "node-c2-seq-$c2SeqNodePort" "localhost" $c2SeqNodePort $c2Node1SeqInfo
+
+    $c2SeqInputFile = Join-Path $TEST_OUTPUTS "c2-seq-input-${RUN_SUFFIX}.txt"
+    @"
+c Alice cA 0 0
+c Alice cB 0 0
+c Alice cc 0 0
+c Alice cD 0 0
+X
+"@ | Set-Content $c2SeqInputFile
+
+    $c2SeqInputContent = Get-Content $c2SeqInputFile -Raw
+    Invoke-ClientSync $c2SeqInputContent "localhost:${c2SeqNodePort}:Org1" "c2" | Out-Null
+    $elapsedC2Seq = "$([Math]::Round(((Get-Date) - $t0_c2_seq).TotalSeconds, 2))s"
+
+    $c2NodeErrContent = Get-Content $c2_node1_dbg_seq -Raw -ErrorAction SilentlyContinue
+    if ($c2NodeErrContent -match "(?i)\[Security\] Invalid signature") {
+        $results += [PSCustomObject]@{ Label="C2/seq-signature-validation"; Status="PASSED"; Time=$elapsedC2Seq; Reason="invalid sequencer signature correctly rejected" }
+    } else {
+        $results += [PSCustomObject]@{ Label="C2/seq-signature-validation"; Status="FAILED"; Time=$elapsedC2Seq; Reason="invalid sequencer signature was not rejected" }
+    }
+
+    # Restore Sequencer public key
+    Move-Item "$c2SeqPubSrc.bak" $c2SeqPubSrc -Force
+    if (Test-Path "$c2SeqPubTarget.bak") {
+        Move-Item "$c2SeqPubTarget.bak" $c2SeqPubTarget -Force
+    }
+} # end if (-not $C2Only)
+
     # Summary Generation
+
     $totalElapsed = [Math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
     $passed = @($results | Where-Object Status -eq 'PASSED').Count
     $failed = @($results | Where-Object Status -eq 'FAILED').Count
