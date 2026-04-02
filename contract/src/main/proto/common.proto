@@ -11,6 +11,7 @@ message CreateWalletRequest {
   string user_id = 1;
   string wallet_id = 2;
   string transaction_id = 3;
+  string organization = 4;
 }
 
 message DeleteWalletRequest {

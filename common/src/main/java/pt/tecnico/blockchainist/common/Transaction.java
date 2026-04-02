@@ -16,7 +16,8 @@ public record Transaction(
     String srcWalletId, 
     String dstWalletId, 
     long amount,
-    String transactionId
+    String transactionId,
+    String organization
 ) {
     /**
      * Enumeration of supported transaction types.

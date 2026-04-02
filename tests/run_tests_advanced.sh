@@ -67,7 +67,7 @@ SEQUENCER_PORT=3001
 # MULTIPLE NODES
 NODE_HOSTS=("localhost" "localhost" "localhost")
 NODE_PORTS=(2001 2002 2003)
-NODE_ORGS=("Org1" "Org2" "Org3")
+NODE_ORGS=("OrgA" "OrgB" "OrgC")
 
 CLIENT_MODULE="client"
 
@@ -796,12 +796,12 @@ if [[ ${C2_ONLY} -eq 0 ]]; then
   ACTIVE_PROCS+=("${b2_seq_pid}")
   assert_service_started "sequencer-b2" "localhost" "${B2_SEQUENCER_PORT}" "${STARTED_BG_LOG_FILE}"
 
-  start_mvn_background "node-b2-${B2_NODE_PORT_1}" "${B2_NODE_PORT_1} Org1 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  start_mvn_background "node-b2-${B2_NODE_PORT_1}" "${B2_NODE_PORT_1} OrgA localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
   b2_node1_pid="${STARTED_BG_PID}"
   ACTIVE_PROCS+=("${b2_node1_pid}")
   assert_service_started "node-b2-${B2_NODE_PORT_1}" "localhost" "${B2_NODE_PORT_1}" "${STARTED_BG_LOG_FILE}"
 
-  start_mvn_background "node-b2-${B2_NODE_PORT_2}" "${B2_NODE_PORT_2} Org2 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  start_mvn_background "node-b2-${B2_NODE_PORT_2}" "${B2_NODE_PORT_2} OrgB localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
   ACTIVE_PROCS+=("${STARTED_BG_PID}")
   assert_service_started "node-b2-${B2_NODE_PORT_2}" "localhost" "${B2_NODE_PORT_2}" "${STARTED_BG_LOG_FILE}"
 
@@ -810,15 +810,15 @@ if [[ ${C2_ONLY} -eq 0 ]]; then
 C Alice cA 0 0
 C Bob cB 0 0
 T BC bc cA 200 0 0
-T BC bc cB 150 1 0
+T BC bc cB 150 0 0
 T Alice cA cB 50 0 0
 X
 EOF
-  run_client_sync "${B2_SEED_INPUT}" "localhost:${B2_NODE_PORT_1}:Org1 localhost:${B2_NODE_PORT_2}:Org2" >/dev/null
+  run_client_sync "${B2_SEED_INPUT}" "localhost:${B2_NODE_PORT_1}:OrgA localhost:${B2_NODE_PORT_2}:OrgB" >/dev/null
   rm -f "${B2_SEED_INPUT}"
 
   printf '%b    Starting late-join node on port %s...%b\n' "${C_DGRAY}" "${B2_NODE_PORT_3}" "${C_RESET}"
-  start_mvn_background "node-b2-${B2_NODE_PORT_3}" "${B2_NODE_PORT_3} Org3 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  start_mvn_background "node-b2-${B2_NODE_PORT_3}" "${B2_NODE_PORT_3} OrgC localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
   ACTIVE_PROCS+=("${STARTED_BG_PID}")
   assert_service_started "node-b2-${B2_NODE_PORT_3}" "localhost" "${B2_NODE_PORT_3}" "${STARTED_BG_LOG_FILE}"
 
@@ -829,8 +829,8 @@ S cB 0 0
 S bc 0 0
 X
 EOF
-  B2_OUT_N1="$(run_client_sync "${B2_CHECK_INPUT}" "localhost:${B2_NODE_PORT_1}:Org1")"
-  B2_OUT_N3="$(run_client_sync "${B2_CHECK_INPUT}" "localhost:${B2_NODE_PORT_3}:Org3")"
+  B2_OUT_N1="$(run_client_sync "${B2_CHECK_INPUT}" "localhost:${B2_NODE_PORT_1}:OrgA")"
+  B2_OUT_N3="$(run_client_sync "${B2_CHECK_INPUT}" "localhost:${B2_NODE_PORT_3}:OrgC")"
   rm -f "${B2_CHECK_INPUT}"
 
   B2_BAL_N1="$(extract_b2_balances "${B2_OUT_N1}")"
@@ -868,17 +868,17 @@ balance: 650"
   ACTIVE_PROCS+=("${b2_seq_pid}")
   assert_service_started "sequencer-b2" "localhost" "${B2_SEQUENCER_PORT}" "${STARTED_BG_LOG_FILE}"
 
-  start_mvn_background "node-b2-${B2_FO_NODE_PORT_1}" "${B2_FO_NODE_PORT_1} Org1 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  start_mvn_background "node-b2-${B2_FO_NODE_PORT_1}" "${B2_FO_NODE_PORT_1} OrgA localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
   b2_fo1_pid="${STARTED_BG_PID}"
   ACTIVE_PROCS+=("${b2_fo1_pid}")
   assert_service_started "node-b2-${B2_FO_NODE_PORT_1}" "localhost" "${B2_FO_NODE_PORT_1}" "${STARTED_BG_LOG_FILE}"
 
-  start_mvn_background "node-b2-${B2_FO_NODE_PORT_2}" "${B2_FO_NODE_PORT_2} Org2 localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+  start_mvn_background "node-b2-${B2_FO_NODE_PORT_2}" "${B2_FO_NODE_PORT_2} OrgB localhost:${B2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
   b2_fo2_pid="${STARTED_BG_PID}"
   ACTIVE_PROCS+=("${b2_fo2_pid}")
   assert_service_started "node-b2-${B2_FO_NODE_PORT_2}" "localhost" "${B2_FO_NODE_PORT_2}" "${STARTED_BG_LOG_FILE}"
 
-  B2_FO_NODES="localhost:${B2_FO_NODE_PORT_1}:Org1 localhost:${B2_FO_NODE_PORT_2}:Org2"
+  B2_FO_NODES="localhost:${B2_FO_NODE_PORT_1}:OrgA localhost:${B2_FO_NODE_PORT_2}:OrgB"
 
   B2_INIT_INPUT="$(mktemp)"
   cat >"${B2_INIT_INPUT}" <<'EOF'
@@ -931,10 +931,10 @@ balance: 600"
   t0_dedup="$(date +%s)"
   B2_DEDUP_INPUT="$(mktemp)"
   cat >"${B2_DEDUP_INPUT}" <<'EOF'
-C Carol cC 1 0
+C Fred cC 1 0
 T BC bc cC 300 0 0
-T Carol cC bc 300 1 0
-E Carol cC 1 0
+T Fred cC bc 300 1 0
+E Fred cC 1 0
 S bc 0 0
 S bc 1 0
 X
@@ -986,7 +986,7 @@ c2_seq_pid="${STARTED_BG_PID}"
 ACTIVE_PROCS+=("${c2_seq_pid}")
 assert_service_started "sequencer-c2" "localhost" "${C2_SEQUENCER_PORT}" "${STARTED_BG_LOG_FILE}"
 
-start_mvn_background "node-c2-${C2_NODE_PORT}" "${C2_NODE_PORT} Org1 localhost:${C2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
+start_mvn_background "node-c2-${C2_NODE_PORT}" "${C2_NODE_PORT} OrgA localhost:${C2_SEQUENCER_PORT}" "${DEBUG_ARGS}"
 c2_node1_pid="${STARTED_BG_PID}"
 c2_node1_dbg="${STARTED_BG_DBG_FILE}"
 ACTIVE_PROCS+=("${c2_node1_pid}")
@@ -998,7 +998,7 @@ C Alice cA 0 0
 X
 EOF
 
-C2_OUT="$(run_client_sync "${C2_INIT_INPUT}" "localhost:${C2_NODE_PORT}:Org1" "c2")"
+C2_OUT="$(run_client_sync "${C2_INIT_INPUT}" "localhost:${C2_NODE_PORT}:OrgA" "c2")"
 C2_ERR="${C2_OUT/c2-client-out/c2-client-err}"
 rm -f "${C2_INIT_INPUT}"
 elapsed_c2=$(( $(date +%s) - t0_c2 ))
@@ -1043,7 +1043,7 @@ c2_seq_pid_seq="${STARTED_BG_PID}"
 ACTIVE_PROCS+=("${c2_seq_pid_seq}")
 assert_service_started "sequencer-c2-seq" "localhost" "${C2_SEQ_PORT}" "${STARTED_BG_LOG_FILE}"
 
-start_mvn_background "node-c2-seq-${C2_SEQ_NODE_PORT}" "${C2_SEQ_NODE_PORT} Org1 localhost:${C2_SEQ_PORT}" "${DEBUG_ARGS}"
+start_mvn_background "node-c2-seq-${C2_SEQ_NODE_PORT}" "${C2_SEQ_NODE_PORT} OrgA localhost:${C2_SEQ_PORT}" "${DEBUG_ARGS}"
 c2_node1_pid_seq="${STARTED_BG_PID}"
 c2_node_dbg_file="${STARTED_BG_DBG_FILE}"
 ACTIVE_PROCS+=("${c2_node1_pid_seq}")
@@ -1058,7 +1058,7 @@ c Alice cD 0 0
 X
 EOF
 
-C2_SEQ_OUT="$(run_client_sync "${C2_SEQ_INPUT}" "localhost:${C2_SEQ_NODE_PORT}:Org1" "c2")"
+C2_SEQ_OUT="$(run_client_sync "${C2_SEQ_INPUT}" "localhost:${C2_SEQ_NODE_PORT}:OrgA" "c2")"
 rm -f "${C2_SEQ_INPUT}"
 elapsed_c2_seq=$(( $(date +%s) - t0_c2_seq ))
 

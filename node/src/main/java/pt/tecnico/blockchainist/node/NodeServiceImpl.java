@@ -2,6 +2,7 @@ package pt.tecnico.blockchainist.node;
 
 import io.grpc.stub.StreamObserver;
 import pt.tecnico.blockchainist.contract.*;
+import pt.tecnico.blockchainist.node.domain.DependencyException;
 import pt.tecnico.blockchainist.node.domain.NodeState;
 import pt.tecnico.blockchainist.common.Transaction;
 import pt.tecnico.blockchainist.common.Utils;
@@ -23,6 +24,7 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
     private final NodeSequencerService sequencer;
     private volatile boolean syncing = true;
     private long syncingTarget = 0;
+    private final String organization;
 
     /**
      * Constructs a new NodeServiceImpl and starts the background transaction
@@ -33,6 +35,7 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
      */
     public NodeServiceImpl(String organization, NodeSequencerService sequencer) {
         this.sequencer = sequencer;
+        this.organization = organization;
 
         // Heartbeat
         startFetchingTransactions();
@@ -63,6 +66,10 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                 throw new IllegalArgumentException("User ID can't be blank");
             if (request.getWalletId().isBlank())
                 throw new IllegalArgumentException("Wallet ID can't be blank");
+            String org = Utils.getUserOrganization(request.getUserId());
+            if (!org.equals(organization))
+                throw new IllegalArgumentException(
+                        "Organization mismatch: expected " + organization + " but got " + org);
 
             // Map
             Transaction tx = new Transaction(
@@ -71,7 +78,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     "",
                     request.getWalletId(),
                     0,
-                    request.getTransactionId());
+                    request.getTransactionId(),
+                    org);
             pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
 
             // Delay
@@ -126,6 +134,10 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                 throw new IllegalArgumentException("User ID can't be blank");
             if (request.getWalletId().isBlank())
                 throw new IllegalArgumentException("Wallet ID can't be blank");
+            String walletOrg = nodeState.getWalletOrganization(request.getWalletId());
+            if (!walletOrg.equals(organization)) {
+                throw new IllegalArgumentException("Wallet does not belong to this node's organization");
+            }
 
             // Map
             Transaction tx = new Transaction(
@@ -134,8 +146,12 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     request.getWalletId(),
                     "",
                     0,
-                    request.getTransactionId());
+                    request.getTransactionId(),
+                    "");
             pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
+
+            // Mark as pending delete so optimistic transfers won't touch this wallet
+            nodeState.markPendingDelete(request.getWalletId());
 
             // Delay
             delayIfRequested();
@@ -193,6 +209,30 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                 throw new IllegalArgumentException("Destination Wallet ID can't be blank");
             if (request.getValue() <= 0)
                 throw new IllegalArgumentException("Transfer Amount must be positive");
+            // Check source wallet, except for SYSTEM
+            String srcWalletOrg = nodeState.getWalletOrganization(request.getSrcWalletId());
+            if (!srcWalletOrg.equals(organization)) {
+                throw new IllegalArgumentException("Source Wallet does not belong to this node's organization");
+            }
+
+            // Apply optimistically
+            boolean isOptimistic = false;
+            String dstWalletOrg = nodeState.getWalletOrganization(request.getDstWalletId());
+            if (dstWalletOrg.equals(organization) && srcWalletOrg.equals(organization)) {
+                // Internal
+                try {
+                    nodeState.optimisticTransfer(request.getSrcUserId(), request.getSrcWalletId(),
+                            request.getDstWalletId(),
+                            request.getValue(), request.getTransactionId());
+                    isOptimistic = true;
+                } catch (DependencyException e) {
+                    Utils.debug("Failed to apply transfer optimistically: %s", e.getMessage());
+                    isOptimistic = false;
+                }
+            } else {
+                // External
+                nodeState.markPendingTransfer(request.getTransactionId(), request.getSrcWalletId(), request.getValue());
+            }
 
             // Map
             Transaction tx = new Transaction(
@@ -201,7 +241,8 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     request.getSrcWalletId(),
                     request.getDstWalletId(),
                     request.getValue(),
-                    request.getTransactionId());
+                    request.getTransactionId(),
+                    "");
             pt.tecnico.blockchainist.contract.Transaction protoTx = Utils.convertToProto(tx);
 
             // Delay
@@ -215,7 +256,9 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
             int assignedSequence = seqRes.getSequenceNumber();
 
             // Wait
-            nodeState.waitForSequence(assignedSequence, request.getTransactionId());
+            if (!isOptimistic) {
+                nodeState.waitForSequence(assignedSequence, request.getTransactionId());
+            }
 
             // Reply
             responseObserver.onNext(TransferResponse.getDefaultInstance());
@@ -386,7 +429,7 @@ public class NodeServiceImpl extends NodeServiceGrpc.NodeServiceImplBase {
                     // signature fail (critical)
                     System.err.println(
                             "[Error] [Heartbeat] " + e.getStatus().getCode() + ": " + e.getStatus().getDescription());
-                    break; 
+                    break;
                 } catch (Exception e) {
                     System.err.println("[Error] [Heartbeat] Unexpected error: " + e.getMessage());
                     try {

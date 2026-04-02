@@ -4,6 +4,7 @@ import java.security.Signature;
 import java.security.SignatureException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -30,6 +31,17 @@ public class Utils {
 
     private static final boolean DEBUG = System.getProperty("debug") != null;
     private static final ConcurrentHashMap<String, Key> keyCache = new ConcurrentHashMap<>();
+    private static final Map<String, String> USER_ORGS = Map.ofEntries(
+            Map.entry("BC", "OrgA"),
+            Map.entry("Alice", "OrgA"),
+            Map.entry("Bob", "OrgA"),
+            Map.entry("Charlie", "OrgA"),
+            Map.entry("David", "OrgB"),
+            Map.entry("Emma", "OrgB"),
+            Map.entry("Fred", "OrgB"),
+            Map.entry("Ginger", "OrgC"),
+            Map.entry("Henry", "OrgC"),
+            Map.entry("Iris", "OrgC"));
 
     /**
      * Prints a debug message to stderr if debug mode is enabled.
@@ -100,6 +112,7 @@ public class Utils {
             case CREATE -> builder.setCreateWallet(CreateWalletRequest.newBuilder()
                     .setUserId(domainTx.srcUserId())
                     .setWalletId(domainTx.dstWalletId())
+                    .setOrganization(domainTx.organization())
                     .build());
 
             case DELETE -> builder.setDeleteWallet(DeleteWalletRequest.newBuilder()
@@ -132,21 +145,24 @@ public class Utils {
                     "",
                     proto.getCreateWallet().getWalletId(),
                     0,
-                    proto.getTransactionId());
+                    proto.getTransactionId(),
+                    proto.getCreateWallet().getOrganization());
             case DELETE_WALLET -> new Transaction(
                     Transaction.Type.DELETE,
                     proto.getDeleteWallet().getUserId(),
                     proto.getDeleteWallet().getWalletId(),
                     "",
                     0,
-                    proto.getTransactionId());
+                    proto.getTransactionId(),
+                    "");
             case TRANSFER -> new Transaction(
                     Transaction.Type.TRANSFER,
                     proto.getTransfer().getSrcUserId(),
                     proto.getTransfer().getSrcWalletId(),
                     proto.getTransfer().getDstWalletId(),
                     proto.getTransfer().getValue(),
-                    proto.getTransactionId());
+                    proto.getTransactionId(),
+                    "");
             default -> throw new IllegalArgumentException("Unknown transaction type");
         };
     }
@@ -223,5 +239,15 @@ public class Utils {
             keyCache.put(resourcePath, key);
             return key;
         }
+    }
+
+    /**
+     * Returns the organization associated with a user ID.
+     *
+     * @param userId the user ID to look up
+     * @return the organization name
+     */
+    public static String getUserOrganization(String userId) {
+        return USER_ORGS.get(userId);
     }
 }

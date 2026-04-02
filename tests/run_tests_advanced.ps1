@@ -27,9 +27,9 @@ $SEQUENCER_PORT = 3001
 
 # MULTIPLE NODES
 $NODES = @(
-    @{ Host = "localhost"; Port = 2001; Org = "Org1" },
-    @{ Host = "localhost"; Port = 2002; Org = "Org2" },
-    @{ Host = "localhost"; Port = 2003; Org = "Org3" }
+    @{ Host = "localhost"; Port = 2001; Org = "OrgA" },
+    @{ Host = "localhost"; Port = 2002; Org = "OrgB" },
+    @{ Host = "localhost"; Port = 2003; Org = "OrgC" }
 )
 
 $CLIENT_MODULE  = "client"
@@ -613,12 +613,12 @@ try {
     $activeProcs += $b2_seq_pid
     Assert-ServiceStarted "sequencer-b2" "localhost" $B2_SEQUENCER_PORT $b2SeqInfo
 
-    $b2Node1Info = Start-MvnBackground "node-b2-$B2_NODE_PORT_1" "$B2_NODE_PORT_1 Org1 localhost:$B2_SEQUENCER_PORT" $debugArgs
+    $b2Node1Info = Start-MvnBackground "node-b2-$B2_NODE_PORT_1" "$B2_NODE_PORT_1 OrgA localhost:$B2_SEQUENCER_PORT" $debugArgs
     $b2_node1_pid = $b2Node1Info.Process
     $activeProcs += $b2_node1_pid
     Assert-ServiceStarted "node-b2-$B2_NODE_PORT_1" "localhost" $B2_NODE_PORT_1 $b2Node1Info
 
-    $b2Node2Info = Start-MvnBackground "node-b2-$B2_NODE_PORT_2" "$B2_NODE_PORT_2 Org2 localhost:$B2_SEQUENCER_PORT" $debugArgs
+    $b2Node2Info = Start-MvnBackground "node-b2-$B2_NODE_PORT_2" "$B2_NODE_PORT_2 OrgB localhost:$B2_SEQUENCER_PORT" $debugArgs
     $b2_node2_pid = $b2Node2Info.Process
     $activeProcs += $b2_node2_pid
     Assert-ServiceStarted "node-b2-$B2_NODE_PORT_2" "localhost" $B2_NODE_PORT_2 $b2Node2Info
@@ -627,14 +627,14 @@ try {
 C Alice cA 0 0
 C Bob cB 0 0
 T BC bc cA 200 0 0
-T BC bc cB 150 1 0
+T BC bc cB 150 0 0
 T Alice cA cB 50 0 0
 X
 "@
-    Invoke-ClientSync $b2SeedInput "localhost:${B2_NODE_PORT_1}:Org1 localhost:${B2_NODE_PORT_2}:Org2" | Out-Null
+    Invoke-ClientSync $b2SeedInput "localhost:${B2_NODE_PORT_1}:OrgA localhost:${B2_NODE_PORT_2}:OrgB" | Out-Null
 
     Write-Host "    Starting late-join node on port $B2_NODE_PORT_3..." -ForegroundColor DarkGray
-    $b2Node3Info = Start-MvnBackground "node-b2-$B2_NODE_PORT_3" "$B2_NODE_PORT_3 Org3 localhost:$B2_SEQUENCER_PORT" $debugArgs
+    $b2Node3Info = Start-MvnBackground "node-b2-$B2_NODE_PORT_3" "$B2_NODE_PORT_3 OrgC localhost:$B2_SEQUENCER_PORT" $debugArgs
     $b2_node3_pid = $b2Node3Info.Process
     $activeProcs += $b2_node3_pid
     Assert-ServiceStarted "node-b2-$B2_NODE_PORT_3" "localhost" $B2_NODE_PORT_3 $b2Node3Info
@@ -645,8 +645,8 @@ S cB 0 0
 S bc 0 0
 X
 "@
-    $b2OutN1 = Invoke-ClientSync $b2CheckInput "localhost:${B2_NODE_PORT_1}:Org1"
-    $b2OutN3 = Invoke-ClientSync $b2CheckInput "localhost:${B2_NODE_PORT_3}:Org3"
+    $b2OutN1 = Invoke-ClientSync $b2CheckInput "localhost:${B2_NODE_PORT_1}:OrgA"
+    $b2OutN3 = Invoke-ClientSync $b2CheckInput "localhost:${B2_NODE_PORT_3}:OrgC"
 
     $b2BalN1 = Extract-B2Balances $b2OutN1
     $b2BalN3 = Extract-B2Balances $b2OutN3
@@ -680,17 +680,17 @@ X
     $activeProcs += $b2_seq_pid
     Assert-ServiceStarted "sequencer-b2" "localhost" $B2_SEQUENCER_PORT $b2SeqInfo
 
-    $b2Fo1Info = Start-MvnBackground "node-b2-$B2_FO_NODE_PORT_1" "$B2_FO_NODE_PORT_1 Org1 localhost:$B2_SEQUENCER_PORT" $debugArgs
+    $b2Fo1Info = Start-MvnBackground "node-b2-$B2_FO_NODE_PORT_1" "$B2_FO_NODE_PORT_1 OrgA localhost:$B2_SEQUENCER_PORT" $debugArgs
     $b2_fo1_pid = $b2Fo1Info.Process
     $activeProcs += $b2_fo1_pid
     Assert-ServiceStarted "node-b2-$B2_FO_NODE_PORT_1" "localhost" $B2_FO_NODE_PORT_1 $b2Fo1Info
 
-    $b2Fo2Info = Start-MvnBackground "node-b2-$B2_FO_NODE_PORT_2" "$B2_FO_NODE_PORT_2 Org2 localhost:$B2_SEQUENCER_PORT" $debugArgs
+    $b2Fo2Info = Start-MvnBackground "node-b2-$B2_FO_NODE_PORT_2" "$B2_FO_NODE_PORT_2 OrgB localhost:$B2_SEQUENCER_PORT" $debugArgs
     $b2_fo2_pid = $b2Fo2Info.Process
     $activeProcs += $b2_fo2_pid
     Assert-ServiceStarted "node-b2-$B2_FO_NODE_PORT_2" "localhost" $B2_FO_NODE_PORT_2 $b2Fo2Info
 
-    $b2FoNodes = "localhost:${B2_FO_NODE_PORT_1}:Org1 localhost:${B2_FO_NODE_PORT_2}:Org2"
+    $b2FoNodes = "localhost:${B2_FO_NODE_PORT_1}:OrgA localhost:${B2_FO_NODE_PORT_2}:OrgB"
 
     $b2InitInput = @"
 C Alice cA 0 0
@@ -737,10 +737,10 @@ X
     #-----------------------------------------
     $t0_dedup = Get-Date
     $b2DedupInput = @"
-C Carol cC 1 0
+C Fred cC 1 0
 T BC bc cC 300 0 0
-T Carol cC bc 300 1 0
-E Carol cC 1 0
+T Fred cC bc 300 1 0
+E Fred cC 1 0
 S bc 0 0
 S bc 1 0
 X
@@ -789,7 +789,7 @@ X
     $activeProcs += $c2_seq_pid
     Assert-ServiceStarted "sequencer-c2" "localhost" 3001 $c2SeqInfo
 
-    $c2Node1Info = Start-MvnBackground "node-c2-2011" "2011 Org1 localhost:3001" $debugArgs
+    $c2Node1Info = Start-MvnBackground "node-c2-2011" "2011 OrgA localhost:3001" $debugArgs
     $c2_node1_pid = $c2Node1Info.Process
     $c2_node1_dbg_file = $c2Node1Info.DbgFile
     $activeProcs += $c2_node1_pid
@@ -799,7 +799,7 @@ X
 C Alice cA 0 0
 X
 "@
-    $c2Out = Invoke-ClientSync $c2InitInput "localhost:2011:Org1" "c2"
+    $c2Out = Invoke-ClientSync $c2InitInput "localhost:2011:OrgA" "c2"
     $elapsedC2 = "$([Math]::Round(((Get-Date) - $t0_c2).TotalSeconds, 2))s"
 
     $c2Node1DbgContent = Get-Content $c2_node1_dbg_file -Raw -ErrorAction SilentlyContinue
@@ -845,7 +845,7 @@ X
     $activeProcs += $c2_seq_pid_seq
     Assert-ServiceStarted "sequencer-c2-seq" "localhost" $c2SeqPort $c2SeqSeqInfo
 
-    $c2Node1SeqInfo = Start-MvnBackground "node-c2-seq-$c2SeqNodePort" "$c2SeqNodePort Org1 localhost:$c2SeqPort" $debugArgs
+    $c2Node1SeqInfo = Start-MvnBackground "node-c2-seq-$c2SeqNodePort" "$c2SeqNodePort OrgA localhost:$c2SeqPort" $debugArgs
     $c2_node1_pid_seq = $c2Node1SeqInfo.Process
     $c2_node1_dbg_seq = $c2Node1SeqInfo.DbgFile
     $activeProcs += $c2_node1_pid_seq
@@ -861,7 +861,7 @@ X
 "@ | Set-Content $c2SeqInputFile
 
     $c2SeqInputContent = Get-Content $c2SeqInputFile -Raw
-    Invoke-ClientSync $c2SeqInputContent "localhost:${c2SeqNodePort}:Org1" "c2" | Out-Null
+    Invoke-ClientSync $c2SeqInputContent "localhost:${c2SeqNodePort}:OrgA" "c2" | Out-Null
     $elapsedC2Seq = "$([Math]::Round(((Get-Date) - $t0_c2_seq).TotalSeconds, 2))s"
 
     $c2NodeErrContent = Get-Content $c2_node1_dbg_seq -Raw -ErrorAction SilentlyContinue

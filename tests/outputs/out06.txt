@@ -7,6 +7,7 @@ ClientMain
 > 
 > 4 OK
 
+> 
 > 5 OK
 balance: 50
 

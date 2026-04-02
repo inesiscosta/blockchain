@@ -1,6 +1,6 @@
-C Bob cB 1 0
-C Charlie cC 1 0
-T Alice cA cC 100 1 0
+C David cB 1 0
+C Emma cC 1 0
+T Alice cA cC 100 0 0
 P 1
 S cA 1 0
 X

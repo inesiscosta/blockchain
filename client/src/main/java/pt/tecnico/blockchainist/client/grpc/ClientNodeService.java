@@ -24,6 +24,7 @@ public class ClientNodeService {
     private final NodeServiceGrpc.NodeServiceBlockingStub blockingStub;
     private final NodeServiceGrpc.NodeServiceStub asyncStub;
     private final int timeout;
+    private final String organization;
 
     /**
      * Constructs a new ClientNodeService and establishes a connection to the
@@ -37,6 +38,7 @@ public class ClientNodeService {
         // Open the connection
         this.channel = ManagedChannelBuilder.forAddress(host, port).usePlaintext().build();
         this.timeout = timeout;
+        this.organization = organization;
 
         // Create the stubs
         this.blockingStub = NodeServiceGrpc.newBlockingStub(channel);
@@ -56,7 +58,7 @@ public class ClientNodeService {
      */
     public CreateWalletResponse createWallet(String userId, String walletId, Integer delay, String transactionId) {
         CreateWalletRequest request = CreateWalletRequest.newBuilder().setUserId(userId).setWalletId(walletId)
-                .setTransactionId(transactionId).build();
+                .setTransactionId(transactionId).setOrganization(organization).build();
         byte[] signature = generateSignature(userId, request, "CreateWalletRequest");
         return withMetadata(blockingStub, delay, signature).createWallet(request);
     }
@@ -142,6 +144,7 @@ public class ClientNodeService {
                 .setUserId(userId)
                 .setWalletId(walletId)
                 .setTransactionId(transactionId)
+                .setOrganization(organization)
                 .build();
         byte[] signature = generateSignature(userId, request, "CreateWalletRequest", observer);
         if (signature == null)

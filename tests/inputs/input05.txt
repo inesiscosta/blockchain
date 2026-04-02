@@ -1,13 +1,13 @@
 C Alice cA 0 0
-C Bob cB 1 0
+C David cB 1 0
 T BC bc cA 50 0 0
-T BC bc cB 30 1 0
+T BC bc cB 30 0 0
 S cA 0 0
 S cA 1 0
 S cB 0 0
 S cB 1 0
-T Alice cA bc 50 1 0
-T Bob cB bc 30 0 0
+T Alice cA bc 50 0 0
+T David cB bc 30 1 0
 E Alice cA 0 0
-E Bob cB 2 0
+E David cB 1 0
 X
