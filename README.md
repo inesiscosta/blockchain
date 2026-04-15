@@ -13,13 +13,6 @@ In all source files (namely in the *groupId*s of the POMs), replace __GXX__ with
 identifier consists of either A or T followed by the group number - always two digits. This change is important for 
 code dependency management, to ensure your code runs using the correct components and not someone else's.
 
-### Team Members
-
-| Number | Name          | User                                   | Email                                              |
-|--------|---------------|----------------------------------------|----------------------------------------------------|
-|  | Inês Costa    | <https://github.com/inesiscosta>       | <mailto:>            |
-|  | Diogo Santos  | <https://github.com/SkyDev125>         | <mailto:> |
-|  | Lidiano Lopes | <https://github.com/lidianolopes-code> | <mailto:>          |
 
 ## Getting Started
 
