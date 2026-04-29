@@ -22,3 +22,14 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# Key material: generate locally with scripts/dev-keys.sh, never commit.
+*.priv
+*.pem
+*.der
+**/src/main/resources/*.pub
+**/src/main/resources/seq/*.pub
+
+# Build and test output
+target/
+tests/test-outputs/
