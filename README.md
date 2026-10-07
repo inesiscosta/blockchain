@@ -1,58 +1,45 @@
 # BlockchainIST
 
-Distributed Systems Project 2026
+A simplified permissioned blockchain inspired by Hyperledger Fabric, built in Java with gRPC for the Distributed Systems course at Instituto Superior Técnico (2025/26).
 
-**Group T52**
+## How it works
 
-**Difficulty level: I am Death incarnate!**
+- **Order-execute:** nodes forward transactions to a central sequencer. The sequencer assigns them global sequence numbers and cuts a block every N transactions or T seconds (by default 4 transactions or 5 s). Nodes pull blocks and execute them in order.
+- **Wallets:** create, delete, transfer, read balance and read the ledger. The central bank wallet `bc` starts with 1000.
+- **Fault tolerance:** clients retry on other nodes with the same transaction id, and replicas skip duplicates. New or restarted nodes catch up from the sequencer.
+- **Optimistic transfers:** a transfer within one organization is answered before its block exists.
+- **Signatures:** users sign their requests and the sequencer signs blocks (RSA/SHA-256).
 
+| Module | Role |
+|---|---|
+| `contract` | protobuf / gRPC definitions |
+| `common` | shared domain model and crypto helpers |
+| `client` | command-line client with retries and request signing |
+| `node` | replica: request handling, block fetching, state machine |
+| `sequencer` | ordering, block cutting and signing |
 
-### Code Identification
+`architecture.md` has the component and sequence diagrams.
 
-In all source files (namely in the *groupId*s of the POMs), replace __GXX__ with your group identifier. The group
-identifier consists of either A or T followed by the group number - always two digits. This change is important for 
-code dependency management, to ensure your code runs using the correct components and not someone else's.
+## Running it
 
+Requires Java 17+ and Maven 3.8+.
 
-## Getting Started
-
-The overall system is made up of several modules.
-The definition of messages and services is in _Contract_.
-
-See the [Project Statement](https://github.com/tecnico-distsys/BlockchainIST-2026) for a complete domain and system description.
-
-### Prerequisites
-
-The Project is configured with Java 17 (which is only compatible with Maven >= 3.8), but if you want to use Java 11 you
-can too -- just downgrade the version in the POMs.
-
-To confirm that you have them installed and which versions they are, run in the terminal:
-
-```s
-javac -version
-mvn -version
-```
-
-### Installation
-
-To compile and install all modules:
-
-```s
+```sh
+./scripts/dev-keys.sh                      # generate local RSA keys (git-ignored)
 mvn clean install
+mvn -pl sequencer exec:java
+mvn -pl node exec:java -Dnode.org=OrgA
+mvn -pl client exec:java -Dnode.org=OrgA
 ```
 
-### Testing
+The integration tests and how to run them are in [`tests/`](tests/README.md).
 
-This project uses the advanced PowerShell script to run all integration tests.
+## Authors
 
-```s
-.\tests\run_tests_advanced.ps1
+Inês Costa and Diogo Santos.
 
-# To see all flags
-Get-Help .\tests\run_tests_advanced.ps1
-```
+The base code and the [project statement](https://github.com/tecnico-distsys/BlockchainIST-2026) are from the IST Distributed Systems teaching staff.
 
-## Built With
+## License
 
-* [Maven](https://maven.apache.org/) - Build and dependency management tool;
-* [gRPC](https://grpc.io/) - RPC framework.
+[MIT](LICENSE)
